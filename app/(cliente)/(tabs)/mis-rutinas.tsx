@@ -19,6 +19,8 @@ export default function MisRutinasScreen() {
       const res = await apiRequest("GET", "/api/routines");
       return res.json();
     },
+    staleTime: 1000 * 60,
+    gcTime: 1000 * 60 * 30,
   });
 
   const onRefresh = useCallback(async () => {
@@ -62,14 +64,17 @@ export default function MisRutinasScreen() {
               <Ionicons name="barbell-outline" size={64} color={Colors.textMuted} />
               <Text style={styles.emptyTitle}>Sin rutinas asignadas</Text>
               <Text style={styles.emptySubtitle}>
-                Tu entrenador todavía no ha asignado ninguna rutina para ti. Espera a que te asigne una.
+                Tu entrenador todavía no ha asignado ninguna rutina para ti.
               </Text>
             </View>
           }
           renderItem={({ item }) => (
             <Pressable
               style={({ pressed }) => [styles.routineCard, pressed && { opacity: 0.85 }]}
-              onPress={() => {}}
+              onPress={() => router.push({
+                pathname: "/(cliente)/rutina/[id]",
+                params: { id: item.id }
+              })}
             >
               <View style={styles.cardTop}>
                 <View style={styles.routineIconWrapper}>
@@ -96,10 +101,10 @@ export default function MisRutinasScreen() {
                 </View>
               )}
 
-              <Pressable style={styles.viewBtn}>
+              <View style={styles.viewBtn}>
                 <Text style={styles.viewBtnText}>Ver ejercicios</Text>
                 <Ionicons name="chevron-forward" size={16} color={Colors.primaryText} />
-              </Pressable>
+              </View>
             </Pressable>
           )}
         />

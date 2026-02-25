@@ -1,18 +1,17 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import {
   View, Text, StyleSheet, FlatList, Pressable, TextInput,
-  Platform, Image, ActivityIndicator, KeyboardAvoidingView,
+  Platform, ActivityIndicator, KeyboardAvoidingView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
-import { File } from "expo-file-system";
-import { fetch as expoFetch } from "expo/fetch";
 import Colors from "@/constants/colors";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/auth";
+import { useUpload } from "@/hooks/useUpload";
+import { ChatMedia, UploadProgressBar } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
 
 interface Message {
@@ -30,17 +29,16 @@ function formatTime(str: string) {
   return new Date(str).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
 }
 
-interface BubbleProps {
-  message: Message;
-  isMe: boolean;
-}
+function MessageBubble({ message, isMe }: { message: Message; isMe: boolean }) {
+  const isImage = message.tipo === "imagen";
+  const isVideo = message.tipo === "video";
+  const hasMedia = (isImage || isVideo) && message.media_url;
 
-function MessageBubble({ message, isMe }: BubbleProps) {
   return (
     <View style={[styles.bubbleRow, isMe ? styles.bubbleRowMe : styles.bubbleRowOther]}>
-      <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
-        {message.tipo === "imagen" && message.media_url ? (
-          <Image source={{ uri: message.media_url }} style={styles.msgImage} resizeMode="cover" />
+      <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther, hasMedia && styles.bubbleMedia]}>
+        {hasMedia ? (
+          <ChatMedia uri={message.media_url!} isVideo={isVideo} isMe={isMe} />
         ) : null}
         {message.contenido ? (
           <Text style={[styles.bubbleText, isMe ? styles.bubbleTextMe : styles.bubbleTextOther]}>
@@ -61,7 +59,7 @@ export default function ClienteChatDetailScreen() {
   const { id, nombre } = useLocalSearchParams<{ id: string; nombre: string }>();
   const qc = useQueryClient();
   const [text, setText] = useState("");
-  const [uploading, setUploading] = useState(false);
+  const { uploading, progress, pickAndUpload, reset: resetUpload } = useUpload();
 
   const { data } = useQuery({
     queryKey: ["/api/chat", id],
@@ -71,6 +69,8 @@ export default function ClienteChatDetailScreen() {
       return res.json();
     },
     refetchInterval: 3000,
+    staleTime: 0,
+    gcTime: 1000 * 60 * 10,
   });
 
   const sendMutation = useMutation({
@@ -95,41 +95,24 @@ export default function ClienteChatDetailScreen() {
   };
 
   const handlePickMedia = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: "images",
-      quality: 0.8,
+    const result = await pickAndUpload("all");
+    if (!result) return;
+    sendMutation.mutate({
+      tipo: result.isVideo ? "video" : "imagen",
+      mediaUrl: result.url,
     });
-    if (result.canceled || !result.assets[0]) return;
-    setUploading(true);
-    try {
-      const asset = result.assets[0];
-      const name = asset.fileName || "photo.jpg";
-      const type = asset.mimeType || "image/jpeg";
-      const formData = new FormData();
-      const fileObj = new File([{ uri: asset.uri } as any], name, { type });
-      formData.append("file", fileObj as any);
-      const baseUrl = getApiUrl();
-      const uploadUrl = new URL("/api/upload", baseUrl).toString();
-      const res = await expoFetch(uploadUrl, { method: "POST", body: formData, credentials: "include" });
-      const uploadData = await res.json();
-      if (!res.ok) throw new Error(uploadData.message);
-      sendMutation.mutate({ tipo: "imagen", mediaUrl: uploadData.url });
-    } catch (err) {
-      console.error("Upload error:", err);
-    } finally {
-      setUploading(false);
-    }
+    resetUpload();
   };
 
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
+  const bottomPad = insets.bottom + (Platform.OS === "web" ? 34 : 8);
 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: Colors.background }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      {/* Header */}
       <View style={[styles.header, { paddingTop: topInset + 8 }]}>
         <Pressable
           style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
@@ -143,11 +126,12 @@ export default function ClienteChatDetailScreen() {
           </View>
           <View>
             <Text style={styles.headerName} numberOfLines={1}>{nombre}</Text>
-            <Text style={styles.headerRole}>Entrenador</Text>
+            <Text style={styles.headerSub}>Entrenador</Text>
           </View>
         </View>
       </View>
 
+      {/* Messages */}
       <FlatList
         data={[...messages].reverse()}
         keyExtractor={(item) => item.id}
@@ -165,7 +149,16 @@ export default function ClienteChatDetailScreen() {
         }
       />
 
-      <View style={[styles.inputBar, { paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 8) }]}>
+      {/* Upload progress */}
+      {uploading && (
+        <View style={styles.uploadBar}>
+          <ActivityIndicator color={Colors.primary} size="small" />
+          <Text style={styles.uploadText}>Subiendo... {progress}%</Text>
+        </View>
+      )}
+
+      {/* Input */}
+      <View style={[styles.inputBar, { paddingBottom: bottomPad }]}>
         <Pressable
           style={({ pressed }) => [styles.mediaBtn, pressed && { opacity: 0.7 }]}
           onPress={handlePickMedia}
@@ -174,7 +167,7 @@ export default function ClienteChatDetailScreen() {
           {uploading ? (
             <ActivityIndicator color={Colors.primary} size="small" />
           ) : (
-            <Ionicons name="image" size={22} color={Colors.textSecondary} />
+            <Ionicons name="attach" size={22} color={Colors.textSecondary} />
           )}
         </Pressable>
 
@@ -197,7 +190,11 @@ export default function ClienteChatDetailScreen() {
           onPress={handleSend}
           disabled={!text.trim() || sendMutation.isPending}
         >
-          <Ionicons name="send" size={18} color={Colors.primaryText} />
+          {sendMutation.isPending ? (
+            <ActivityIndicator color={Colors.primaryText} size="small" />
+          ) : (
+            <Ionicons name="send" size={18} color={Colors.primaryText} />
+          )}
         </Pressable>
       </View>
     </KeyboardAvoidingView>
@@ -247,7 +244,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.text,
   },
-  headerRole: {
+  headerSub: {
     fontFamily: "Outfit_400Regular",
     fontSize: 12,
     color: Colors.primary,
@@ -261,11 +258,15 @@ const styles = StyleSheet.create({
   bubbleRowMe: { alignItems: "flex-end" },
   bubbleRowOther: { alignItems: "flex-start" },
   bubble: {
-    maxWidth: "75%",
+    maxWidth: "78%",
     borderRadius: 18,
     paddingHorizontal: 14,
     paddingVertical: 10,
     paddingBottom: 6,
+  },
+  bubbleMedia: {
+    paddingHorizontal: 6,
+    paddingTop: 6,
   },
   bubbleMe: {
     backgroundColor: Colors.primary,
@@ -277,11 +278,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  msgImage: { width: 200, height: 150, borderRadius: 12, marginBottom: 4 },
   bubbleText: {
     fontFamily: "Outfit_400Regular",
     fontSize: 15,
     lineHeight: 22,
+    marginTop: 4,
   },
   bubbleTextMe: { color: Colors.primaryText },
   bubbleTextOther: { color: Colors.text },
@@ -304,6 +305,22 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_400Regular",
     fontSize: 15,
     color: Colors.textMuted,
+  },
+  uploadBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: Colors.card,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  uploadText: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 13,
+    color: Colors.textMuted,
+    flex: 1,
   },
   inputBar: {
     flexDirection: "row",
