@@ -61,7 +61,7 @@ export default function LoginScreen() {
           >
             <Ionicons name="barbell" size={32} color={Colors.primaryText} />
           </LinearGradient>
-          <Text style={styles.appName}>TrainerPro</Text>
+          <Text style={styles.appName}>Diego App</Text>
           <Text style={styles.tagline}>Tu plataforma de entrenamiento personal</Text>
         </View>
 

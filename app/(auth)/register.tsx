@@ -69,7 +69,7 @@ export default function RegisterScreen() {
         </Pressable>
 
         <Text style={styles.title}>Crear Cuenta</Text>
-        <Text style={styles.subtitle}>Únete a TrainerPro hoy</Text>
+        <Text style={styles.subtitle}>Únete a Diego App hoy</Text>
 
         <View style={styles.form}>
           {error ? (
