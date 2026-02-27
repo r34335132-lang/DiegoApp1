@@ -7,7 +7,7 @@ A fully Spanish personal trainer mobile app built with React Native/Expo and Exp
 - **Backend**: Express + TypeScript + PostgreSQL (via pg), session auth with connect-pg-simple
 - **Styling**: react-native StyleSheet, Outfit font, dark theme (#09090B), electric lime accent (#C9F93E)
 - **State**: @tanstack/react-query (5min staleTime / 60min gcTime), React Context for auth
-- **Media**: expo-image-picker + XHR upload, files saved to /uploads dir + media_files table
+- **Media**: expo-image-picker + XHR upload, files saved to /uploads dir + media_files table; expo-video (v3.0.16) for inline video playback; expo-image for images and animated GIFs
 
 ## Architecture
 
@@ -31,11 +31,14 @@ Root Stack → (auth) login/register | (entrenador) Stack → (tabs) + rutina/[i
 
 ## Key Features
 - Full CRUD for routines and exercises (trainer)
-- Image/video upload for exercises and chat with progress bar (XHR)
-- Inverted FlatList chat with 3s refetch, multimedia ChatMedia bubbles
+- Image/video/GIF upload for exercises and chat with progress bar (XHR); useUpload hook handles blob fetch → XHR
+- Inline media rendering: expo-video player (play/pause/progress/fullscreen), expo-image for images + animated GIFs
+- GIF detection from URL extension (.gif) in getMediaType() helper; chat supports tipo "imagen"|"video"|"gif"
+- No external links for media — all video/image/GIF renders inside the app
+- Inverted FlatList chat with 3s refetch, multimedia ChatMedia bubbles with inline video player
 - Client workout timer: exercise timer + rest countdown + total timer + completion summary
 - Auto-send workout summary to trainer via chat on completion
-- Video watch tracking (AppState detection when returning from video)
+- Video watch tracking (AppState detection)
 - Trainer dashboard shows recent client training sessions
 - Haptic feedback on workout exercise completion
 

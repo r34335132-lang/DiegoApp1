@@ -1,13 +1,145 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, Modal, Pressable,
-  Dimensions, Platform, Linking, ActivityIndicator,
+  Dimensions, Platform, ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
+import { VideoView, useVideoPlayer } from "expo-video";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
+
+export function getMediaType(url: string): "gif" | "video" | "image" {
+  if (!url) return "image";
+  const lower = url.toLowerCase().split("?")[0];
+  if (lower.endsWith(".gif")) return "gif";
+  if (
+    lower.endsWith(".mp4") ||
+    lower.endsWith(".mov") ||
+    lower.endsWith(".avi") ||
+    lower.endsWith(".webm")
+  )
+    return "video";
+  return "image";
+}
+
+interface InlineVideoProps {
+  uri: string;
+  style?: object;
+  compact?: boolean;
+}
+
+export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
+  const videoRef = useRef<VideoView>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [isReady, setIsReady] = useState(false);
+
+  const player = useVideoPlayer({ uri }, (p) => {
+    p.loop = false;
+    p.muted = false;
+  });
+
+  useEffect(() => {
+    const playingSub = player.addListener("playingChange", ({ isPlaying: playing }) => {
+      setIsPlaying(playing);
+    });
+    const timeSub = player.addListener("timeUpdate", ({ currentTime }) => {
+      setIsReady(true);
+      const dur = player.duration;
+      if (dur && dur > 0) {
+        setProgress(currentTime / dur);
+      }
+    });
+    const endSub = player.addListener("playToEnd", () => {
+      setIsPlaying(false);
+      setProgress(0);
+      player.currentTime = 0;
+    });
+    const statusSub = player.addListener("statusChange", ({ status }) => {
+      if (status === "readyToPlay") setIsReady(true);
+    });
+
+    return () => {
+      playingSub.remove();
+      timeSub.remove();
+      endSub.remove();
+      statusSub.remove();
+    };
+  }, [player]);
+
+  const togglePlay = useCallback(() => {
+    if (isPlaying) {
+      player.pause();
+    } else {
+      player.play();
+    }
+  }, [player, isPlaying]);
+
+  const openFullscreen = useCallback(async () => {
+    try {
+      await videoRef.current?.enterFullscreen();
+    } catch {}
+  }, []);
+
+  const controlH = compact ? 32 : 40;
+
+  return (
+    <View style={[styles.videoContainer, style]}>
+      <VideoView
+        ref={videoRef}
+        player={player}
+        style={styles.videoElement}
+        contentFit="contain"
+        nativeControls={false}
+      />
+
+      {!isReady && (
+        <View style={styles.bufferingOverlay}>
+          <ActivityIndicator color={Colors.primary} size={compact ? "small" : "large"} />
+        </View>
+      )}
+
+      {!isPlaying && isReady && (
+        <Pressable style={styles.bigPlayOverlay} onPress={togglePlay}>
+          <View style={styles.bigPlayBtn}>
+            <Ionicons name="play" size={compact ? 22 : 32} color="#fff" />
+          </View>
+        </Pressable>
+      )}
+
+      <View style={[styles.controls, { height: controlH }]}>
+        <Pressable
+          style={[styles.controlBtn, { width: controlH, height: controlH }]}
+          onPress={togglePlay}
+        >
+          <Ionicons
+            name={isPlaying ? "pause" : "play"}
+            size={compact ? 14 : 16}
+            color="#fff"
+          />
+        </Pressable>
+
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${Math.min(progress * 100, 100)}%` as any },
+            ]}
+          />
+        </View>
+
+        <Pressable
+          style={[styles.controlBtn, { width: controlH, height: controlH }]}
+          onPress={openFullscreen}
+        >
+          <Ionicons name="expand" size={compact ? 13 : 15} color="#fff" />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
 
 interface MediaViewerProps {
   uri: string;
@@ -16,38 +148,31 @@ interface MediaViewerProps {
   style?: object;
 }
 
-export function MediaViewer({ uri, isVideo = false, thumbnailStyle, style }: MediaViewerProps) {
+export function MediaViewer({
+  uri,
+  isVideo,
+  thumbnailStyle,
+  style,
+}: MediaViewerProps) {
   const [expanded, setExpanded] = useState(false);
   const [imgLoading, setImgLoading] = useState(true);
 
-  const openVideo = async () => {
-    try {
-      await Linking.openURL(uri);
-    } catch {}
-  };
+  const mediaType = isVideo === true ? "video" : getMediaType(uri);
 
-  if (isVideo) {
+  if (mediaType === "video") {
     return (
-      <Pressable
-        style={[styles.videoThumb, thumbnailStyle, style]}
-        onPress={openVideo}
-      >
-        <View style={styles.videoOverlay}>
-          <View style={styles.playBtn}>
-            <Ionicons name="play" size={24} color="#fff" />
-          </View>
-        </View>
-        <View style={styles.videoLabel}>
-          <Ionicons name="videocam" size={12} color="#fff" />
-          <Text style={styles.videoLabelText}>Video</Text>
-        </View>
-      </Pressable>
+      <View style={[styles.videoWrapper, thumbnailStyle, style]}>
+        <InlineVideo uri={uri} />
+      </View>
     );
   }
 
   return (
     <>
-      <Pressable style={[styles.imgWrapper, thumbnailStyle, style]} onPress={() => setExpanded(true)}>
+      <Pressable
+        style={[styles.imgWrapper, thumbnailStyle, style]}
+        onPress={() => setExpanded(true)}
+      >
         <Image
           source={{ uri }}
           style={styles.thumbImage}
@@ -64,11 +189,25 @@ export function MediaViewer({ uri, isVideo = false, thumbnailStyle, style }: Med
         <View style={styles.expandBtn}>
           <Ionicons name="expand" size={14} color="#fff" />
         </View>
+        {mediaType === "gif" && (
+          <View style={styles.gifBadge}>
+            <Text style={styles.gifBadgeText}>GIF</Text>
+          </View>
+        )}
       </Pressable>
 
-      <Modal visible={expanded} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setExpanded(false)}>
+      <Modal
+        visible={expanded}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setExpanded(false)}
+      >
         <View style={styles.lightbox}>
-          <Pressable style={styles.lightboxClose} onPress={() => setExpanded(false)}>
+          <Pressable
+            style={styles.lightboxClose}
+            onPress={() => setExpanded(false)}
+          >
             <Ionicons name="close" size={28} color="#fff" />
           </Pressable>
           <Image
@@ -85,34 +224,72 @@ export function MediaViewer({ uri, isVideo = false, thumbnailStyle, style }: Med
 
 interface ChatMediaProps {
   uri: string;
+  tipo?: string;
   isVideo?: boolean;
   isMe: boolean;
 }
 
-export function ChatMedia({ uri, isVideo = false, isMe }: ChatMediaProps) {
-  const openVideo = async () => {
-    try {
-      await Linking.openURL(uri);
-    } catch {}
-  };
+export function ChatMedia({ uri, tipo, isVideo }: ChatMediaProps) {
+  const [expanded, setExpanded] = useState(false);
 
-  if (isVideo) {
+  const mediaType =
+    isVideo === true || tipo === "video"
+      ? "video"
+      : tipo === "gif" || getMediaType(uri) === "gif"
+      ? "gif"
+      : "image";
+
+  if (mediaType === "video") {
     return (
-      <Pressable style={styles.chatVideoThumb} onPress={openVideo}>
-        <View style={styles.chatVideoOverlay}>
-          <View style={styles.playBtn}>
-            <Ionicons name="play" size={20} color="#fff" />
-          </View>
-        </View>
-        <View style={styles.videoLabel}>
-          <Ionicons name="videocam" size={11} color="#fff" />
-          <Text style={styles.videoLabelText}>Video — Toca para ver</Text>
-        </View>
-      </Pressable>
+      <View style={styles.chatVideoWrapper}>
+        <InlineVideo uri={uri} compact style={styles.chatVideoInner} />
+      </View>
     );
   }
 
-  return <MediaViewer uri={uri} thumbnailStyle={styles.chatImage} />;
+  return (
+    <>
+      <Pressable style={styles.chatImageWrapper} onPress={() => setExpanded(true)}>
+        <Image
+          source={{ uri }}
+          style={styles.chatImage}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+        />
+        {mediaType === "gif" && (
+          <View style={styles.gifBadge}>
+            <Text style={styles.gifBadgeText}>GIF</Text>
+          </View>
+        )}
+        <View style={styles.expandBtn}>
+          <Ionicons name="expand" size={13} color="#fff" />
+        </View>
+      </Pressable>
+
+      <Modal
+        visible={expanded}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setExpanded(false)}
+      >
+        <View style={styles.lightbox}>
+          <Pressable
+            style={styles.lightboxClose}
+            onPress={() => setExpanded(false)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </Pressable>
+          <Image
+            source={{ uri }}
+            style={styles.lightboxImage}
+            contentFit="contain"
+            cachePolicy="memory-disk"
+          />
+        </View>
+      </Modal>
+    </>
+  );
 }
 
 interface UploadProgressBarProps {
@@ -122,14 +299,21 @@ interface UploadProgressBarProps {
   onRetry?: () => void;
 }
 
-export function UploadProgressBar({ progress, visible, error, onRetry }: UploadProgressBarProps) {
+export function UploadProgressBar({
+  progress,
+  visible,
+  error,
+  onRetry,
+}: UploadProgressBarProps) {
   if (!visible && !error) return null;
 
   if (error) {
     return (
       <View style={styles.errorContainer}>
         <Ionicons name="alert-circle" size={16} color={Colors.error} />
-        <Text style={styles.errorText} numberOfLines={2}>{error}</Text>
+        <Text style={styles.errorText} numberOfLines={2}>
+          {error}
+        </Text>
         {onRetry && (
           <Pressable
             style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.7 }]}
@@ -154,6 +338,72 @@ export function UploadProgressBar({ progress, visible, error, onRetry }: UploadP
 }
 
 const styles = StyleSheet.create({
+  videoWrapper: {
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#000",
+  },
+  videoContainer: {
+    width: "100%",
+    minHeight: 180,
+    backgroundColor: "#0a0a0a",
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  videoElement: {
+    width: "100%",
+    height: 180,
+  },
+  bufferingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    bottom: 40,
+  },
+  bigPlayOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bigPlayBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  controls: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.75)",
+    paddingHorizontal: 4,
+    gap: 4,
+  },
+  controlBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 4,
+  },
+  progressTrack: {
+    flex: 1,
+    height: 3,
+    backgroundColor: "rgba(255,255,255,0.25)",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: Colors.primary,
+    borderRadius: 2,
+  },
   imgWrapper: {
     borderRadius: 12,
     overflow: "hidden",
@@ -180,64 +430,39 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  videoThumb: {
-    borderRadius: 12,
-    backgroundColor: "#1a1a2e",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-    minHeight: 120,
-    position: "relative",
-  },
-  videoOverlay: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 120,
-  },
-  chatVideoThumb: {
-    borderRadius: 12,
-    backgroundColor: "#1a1a2e",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 200,
-    height: 130,
-    position: "relative",
-    overflow: "hidden",
-  },
-  chatVideoOverlay: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  playBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.6)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  videoLabel: {
+  gifBadge: {
     position: "absolute",
-    bottom: 8,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
+    top: 6,
+    left: 6,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
   },
-  videoLabelText: {
-    fontSize: 11,
-    color: "rgba(255,255,255,0.8)",
-    fontFamily: "Outfit_500Medium",
+  gifBadgeText: {
+    fontSize: 10,
+    color: Colors.primary,
+    fontFamily: "Outfit_700Bold",
+    letterSpacing: 0.5,
+  },
+  chatVideoWrapper: {
+    borderRadius: 12,
+    overflow: "hidden",
+    marginVertical: 2,
+    width: 240,
+  },
+  chatVideoInner: {
+    minHeight: 150,
+  },
+  chatImageWrapper: {
+    borderRadius: 12,
+    overflow: "hidden",
+    position: "relative",
   },
   chatImage: {
     width: 200,
     height: 150,
+    borderRadius: 12,
   },
   lightbox: {
     flex: 1,

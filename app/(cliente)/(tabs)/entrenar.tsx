@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
-import * as Linking from "expo-linking";
+import { InlineVideo } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { apiRequest } from "@/lib/query-client";
@@ -259,9 +259,7 @@ export default function EntrenarScreen() {
   }, [sessionId, totalSeconds, selectedRoutine, exercises, routinesData]);
 
   const openVideo = useCallback((ex: Exercise) => {
-    if (!ex.video_url) return;
     videoStartRef.current = Date.now();
-    Linking.openURL(ex.video_url).catch(() => Alert.alert("Error", "No se pudo abrir el video"));
   }, []);
 
   const resetWorkout = useCallback(() => {
@@ -408,13 +406,9 @@ export default function EntrenarScreen() {
             </View>
 
             {ex.video_url && (
-              <Pressable
-                style={({ pressed }) => [styles.videoBtn, pressed && { opacity: 0.8 }]}
-                onPress={() => openVideo(ex)}
-              >
-                <Ionicons name="play-circle" size={22} color={Colors.primary} />
-                <Text style={styles.videoBtnText}>Ver video demostración</Text>
-              </Pressable>
+              <View style={styles.videoInlineWrapper}>
+                <InlineVideo uri={ex.video_url} />
+              </View>
             )}
           </View>
 
@@ -726,21 +720,10 @@ const styles = StyleSheet.create({
     height: 32,
     backgroundColor: Colors.border,
   },
-  videoBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: Colors.primary + "15",
+  videoInlineWrapper: {
     borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: Colors.primary + "44",
-  },
-  videoBtnText: {
-    fontFamily: "Outfit_600SemiBold",
-    fontSize: 14,
-    color: Colors.primary,
+    overflow: "hidden",
+    marginTop: 8,
   },
   completeBtn: {
     flexDirection: "row",

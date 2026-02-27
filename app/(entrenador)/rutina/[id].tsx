@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, Modal, ActivityIndicator, Linking,
+  Platform, Modal, ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -11,7 +11,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { apiRequest } from "@/lib/query-client";
 import { useUpload } from "@/hooks/useUpload";
-import { UploadProgressBar } from "@/components/MediaViewer";
+import { MediaViewer, InlineVideo, UploadProgressBar } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
 
 export default function RutinaDetailScreen() {
@@ -212,19 +212,10 @@ export default function RutinaDetailScreen() {
               ) : null}
 
               {ex.video_url ? (
-                <Pressable
-                  style={styles.videoCard}
-                  onPress={() => Linking.openURL(ex.video_url)}
-                >
-                  <View style={styles.videoPlayBtn}>
-                    <Ionicons name="play" size={22} color={Colors.primaryText} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.videoCardTitle}>Video demostrativo</Text>
-                    <Text style={styles.videoCardSub} numberOfLines={1}>{ex.video_url.split("/").pop()}</Text>
-                  </View>
-                  <Ionicons name="open-outline" size={18} color={Colors.textMuted} />
-                </Pressable>
+                <View style={styles.mediaWrapper}>
+                  <Text style={styles.mediaLabel}>Video demostrativo</Text>
+                  <InlineVideo uri={ex.video_url} style={styles.videoPlayer} />
+                </View>
               ) : null}
             </View>
           ))
@@ -596,35 +587,10 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 12,
   },
-  videoCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginTop: 12,
-    backgroundColor: Colors.surface,
+  videoPlayer: {
     borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: Colors.accentBlue + "44",
-  },
-  videoPlayBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Colors.accentBlue,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  videoCardTitle: {
-    fontFamily: "Outfit_600SemiBold",
-    fontSize: 14,
-    color: Colors.text,
-  },
-  videoCardSub: {
-    fontFamily: "Outfit_400Regular",
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 2,
+    overflow: "hidden",
+    marginTop: 4,
   },
   overlay: {
     flex: 1,

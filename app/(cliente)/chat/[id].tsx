@@ -32,13 +32,14 @@ function formatTime(str: string) {
 function MessageBubble({ message, isMe }: { message: Message; isMe: boolean }) {
   const isImage = message.tipo === "imagen";
   const isVideo = message.tipo === "video";
-  const hasMedia = (isImage || isVideo) && message.media_url;
+  const isGif = message.tipo === "gif";
+  const hasMedia = (isImage || isVideo || isGif) && message.media_url;
 
   return (
     <View style={[styles.bubbleRow, isMe ? styles.bubbleRowMe : styles.bubbleRowOther]}>
       <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther, hasMedia && styles.bubbleMedia]}>
         {hasMedia ? (
-          <ChatMedia uri={message.media_url!} isVideo={isVideo} isMe={isMe} />
+          <ChatMedia uri={message.media_url!} tipo={message.tipo} isMe={isMe} />
         ) : null}
         {message.contenido ? (
           <Text style={[styles.bubbleText, isMe ? styles.bubbleTextMe : styles.bubbleTextOther]}>
