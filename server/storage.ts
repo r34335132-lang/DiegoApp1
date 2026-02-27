@@ -289,3 +289,97 @@ export async function findUserByEmail(email: string) {
   );
   return result.rows[0] || null;
 }
+
+// TRAINING SESSIONS
+export async function createTrainingSession(data: {
+  clientId: string;
+  routineId?: string;
+  routineNombre?: string;
+  totalExercises?: number;
+}) {
+  const result = await dbQuery(
+    `INSERT INTO training_sessions (client_id, routine_id, routine_nombre, total_exercises)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [data.clientId, data.routineId || null, data.routineNombre || null, data.totalExercises || 0]
+  );
+  return result.rows[0];
+}
+
+export async function finishTrainingSession(id: string, data: {
+  durationSeconds: number;
+  exercisesCompleted: number;
+  notas?: string;
+}) {
+  const result = await dbQuery(
+    `UPDATE training_sessions
+     SET ended_at = NOW(), duration_seconds = $2, exercises_completed = $3, notas = $4
+     WHERE id = $1 RETURNING *`,
+    [id, data.durationSeconds, data.exercisesCompleted, data.notas || null]
+  );
+  return result.rows[0];
+}
+
+export async function getClientTrainingSessions(clientId: string, limit = 20) {
+  const result = await dbQuery(
+    `SELECT ts.*, r.nombre as routine_nombre_ref
+     FROM training_sessions ts
+     LEFT JOIN routines r ON ts.routine_id = r.id
+     WHERE ts.client_id = $1
+     ORDER BY ts.created_at DESC LIMIT $2`,
+    [clientId, limit]
+  );
+  return result.rows;
+}
+
+export async function getTrainerClientSessions(trainerId: string, limit = 50) {
+  const result = await dbQuery(
+    `SELECT ts.*, u.nombre as client_nombre, u.apellido as client_apellido
+     FROM training_sessions ts
+     JOIN users u ON ts.client_id = u.id
+     JOIN trainer_clients tc ON tc.client_id = ts.client_id
+     WHERE tc.trainer_id = $1
+     ORDER BY ts.created_at DESC LIMIT $2`,
+    [trainerId, limit]
+  );
+  return result.rows;
+}
+
+// VIDEO SESSIONS
+export async function createVideoSession(data: {
+  userId: string;
+  exerciseId: string;
+  exerciseNombre?: string;
+  watchedSeconds: number;
+  completed?: boolean;
+}) {
+  const result = await dbQuery(
+    `INSERT INTO training_video_sessions (user_id, exercise_id, exercise_nombre, watched_seconds, completed)
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [data.userId, data.exerciseId, data.exerciseNombre || null, data.watchedSeconds, data.completed || false]
+  );
+  return result.rows[0];
+}
+
+export async function getVideoSessionsByExercise(exerciseId: string) {
+  const result = await dbQuery(
+    `SELECT tvs.*, u.nombre, u.apellido
+     FROM training_video_sessions tvs
+     JOIN users u ON tvs.user_id = u.id
+     WHERE tvs.exercise_id = $1
+     ORDER BY tvs.created_at DESC`,
+    [exerciseId]
+  );
+  return result.rows;
+}
+
+export async function getClientVideoSessions(clientId: string) {
+  const result = await dbQuery(
+    `SELECT tvs.*, e.nombre as exercise_nombre_ref
+     FROM training_video_sessions tvs
+     LEFT JOIN exercises e ON tvs.exercise_id = e.id
+     WHERE tvs.user_id = $1
+     ORDER BY tvs.created_at DESC LIMIT 30`,
+    [clientId]
+  );
+  return result.rows;
+}

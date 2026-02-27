@@ -1,0 +1,163 @@
+The app is working. Now implement fully functional media upload, training tracking, notifications, and fix keyboard UI issues.
+
+The app name is Diego App and must remain fully in Spanish.
+
+✅ Media upload for routines and chat (VERY IMPORTANT)
+
+Implement real image and video upload:
+
+Trainer can upload media to:
+
+routines
+
+exercises
+
+Client can upload media to:
+
+progress
+
+chat
+
+Requirements:
+
+Use device image/video picker
+
+Upload to storage (Supabase Storage or similar)
+
+Save media_url in database
+
+Show upload progress
+
+Render images and videos inside routine screens and chat
+
+Both trainer and client must see media
+
+Allow downloading media for offline viewing
+
+✅ Video player tracking (NEW FEATURE)
+
+When a client watches an exercise video:
+
+Track:
+
+Time watched
+
+Total duration
+
+Completion percentage
+
+Create table:
+
+training_video_sessions
+
+Fields:
+
+user_id
+
+exercise_id
+
+watched_seconds
+
+completed
+
+timestamp
+
+Send this data to the trainer dashboard.
+
+✅ Training session timer
+
+Add training mode for clients:
+
+Start workout
+
+Timer per exercise
+
+Rest timer between exercises
+
+Total workout timer
+
+Track:
+
+time training
+
+rest time
+
+exercises completed
+
+Create table:
+
+training_sessions
+
+Send session summary to trainer automatically.
+
+✅ Coach notifications during workout
+
+Trainer can send a personalized message while client is training.
+
+Requirements:
+
+Real-time message
+
+Push notification
+
+Show inside training screen
+
+✅ Global notifications
+
+Implement push/local notifications for:
+
+New chat message
+
+Routine assigned
+
+Trainer message during workout
+
+Workout reminders
+
+✅ Fix keyboard overlap bug (VERY IMPORTANT)
+
+When adding a client or typing messages:
+
+Use KeyboardAvoidingView
+
+Inputs must remain visible
+
+Scroll automatically when keyboard opens
+
+Work on Android and iOS
+
+✅ Database relations
+
+Ensure:
+
+exercises have video_url
+
+chat_messages support media_url
+
+training_sessions linked to routines
+
+video_sessions linked to exercises
+
+✅ UI requirements
+
+Video player with progress bar
+
+Workout screen with timers
+
+Trainer dashboard showing:
+
+workout duration
+
+video watched %
+
+completion status
+
+Notifications UI
+
+✅ Offline behavior
+
+Queue media uploads offline
+
+Sync timers and sessions later
+
+Cache videos downloaded

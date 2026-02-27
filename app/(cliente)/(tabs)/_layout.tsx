@@ -17,6 +17,10 @@ function NativeTabLayout() {
         <Icon sf={{ default: "dumbbell", selected: "dumbbell.fill" }} />
         <Label>Rutinas</Label>
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="entrenar">
+        <Icon sf={{ default: "flame", selected: "flame.fill" }} />
+        <Label>Entrenar</Label>
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="mi-progreso">
         <Icon sf={{ default: "chart.xyaxis.line", selected: "chart.xyaxis.line" }} />
         <Label>Progreso</Label>
@@ -71,6 +75,13 @@ function ClassicTabLayout() {
         options={{
           title: "Rutinas",
           tabBarIcon: ({ color }) => <Ionicons name="barbell" size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="entrenar"
+        options={{
+          title: "Entrenar",
+          tabBarIcon: ({ color }) => <Ionicons name="flame" size={24} color={color} />,
         }}
       />
       <Tabs.Screen

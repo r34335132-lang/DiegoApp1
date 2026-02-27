@@ -11,7 +11,9 @@ import {
   createRoutine, getRoutineById, deleteRoutine, getRoutineExercises,
   createExercise, deleteExercise, getClientProgress, createProgressEntry,
   getChatMessages, sendChatMessage, getChatConversations,
-  saveMediaFile, updateUserAvatar, findUserByEmail
+  saveMediaFile, updateUserAvatar, findUserByEmail,
+  createTrainingSession, finishTrainingSession, getClientTrainingSessions, getTrainerClientSessions,
+  createVideoSession, getVideoSessionsByExercise, getClientVideoSessions
 } from "./storage";
 
 const PgSession = connectPgSimple(session);
@@ -343,6 +345,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
         receiverId, contenido, tipo, mediaUrl
       });
       return res.status(201).json({ message });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // TRAINING SESSION ROUTES
+  app.post("/api/training-sessions", requireAuth, async (req, res) => {
+    try {
+      const { routineId, routineNombre, totalExercises } = req.body;
+      const session = await createTrainingSession({
+        clientId: req.session!.userId!,
+        routineId,
+        routineNombre,
+        totalExercises,
+      });
+      return res.status(201).json({ session });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/training-sessions/:id", requireAuth, async (req, res) => {
+    try {
+      const { durationSeconds, exercisesCompleted, notas } = req.body;
+      const session = await finishTrainingSession(req.params.id, {
+        durationSeconds: durationSeconds || 0,
+        exercisesCompleted: exercisesCompleted || 0,
+        notas,
+      });
+      return res.json({ session });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/training-sessions", requireAuth, async (req, res) => {
+    try {
+      const user = await getUserById(req.session!.userId!);
+      if (!user) return res.status(401).json({ message: "No autorizado" });
+      if (user.role === "entrenador") {
+        const sessions = await getTrainerClientSessions(user.id);
+        return res.json({ sessions });
+      } else {
+        const clientId = (req.query.clientId as string) || user.id;
+        const sessions = await getClientTrainingSessions(clientId);
+        return res.json({ sessions });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // VIDEO SESSION ROUTES
+  app.post("/api/video-sessions", requireAuth, async (req, res) => {
+    try {
+      const { exerciseId, exerciseNombre, watchedSeconds, completed } = req.body;
+      if (!exerciseId) return res.status(400).json({ message: "exerciseId es requerido" });
+      const session = await createVideoSession({
+        userId: req.session!.userId!,
+        exerciseId,
+        exerciseNombre,
+        watchedSeconds: watchedSeconds || 0,
+        completed: completed || false,
+      });
+      return res.status(201).json({ session });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/video-sessions/:exerciseId", requireAuth, async (req, res) => {
+    try {
+      const sessions = await getVideoSessionsByExercise(req.params.exerciseId);
+      return res.json({ sessions });
+    } catch (err: any) {
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/video-sessions", requireAuth, async (req, res) => {
+    try {
+      const clientId = (req.query.clientId as string) || req.session!.userId!;
+      const sessions = await getClientVideoSessions(clientId);
+      return res.json({ sessions });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

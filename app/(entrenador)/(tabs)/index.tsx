@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, RefreshControl, Image, ActivityIndicator,
+  Platform, RefreshControl, Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
@@ -64,15 +64,26 @@ export default function TrainerDashboard() {
     },
   });
 
+  const { data: sessionsData, refetch: refetchSessions } = useQuery({
+    queryKey: ["/api/training-sessions"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/training-sessions");
+      return res.json();
+    },
+    staleTime: 1000 * 30,
+    refetchInterval: 1000 * 60,
+  });
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refetchClients(), refetchRoutines(), refetchChats()]);
+    await Promise.all([refetchClients(), refetchRoutines(), refetchChats(), refetchSessions()]);
     setRefreshing(false);
   }, []);
 
   const clients = clientsData?.clients || [];
   const routines = routinesData?.routines || [];
   const conversations = chatsData?.conversations || [];
+  const sessions = sessionsData?.sessions || [];
   const totalUnread = conversations.reduce((sum: number, c: any) => sum + Number(c.unread_count || 0), 0);
   const activeClients = clients.filter((c: any) => c.status === "activo").length;
 
@@ -276,6 +287,38 @@ export default function TrainerDashboard() {
               </View>
             </Pressable>
           ))
+        )}
+
+        {/* Client Workout Activity */}
+        {sessions.length > 0 && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Actividad de clientes</Text>
+            </View>
+            {sessions.slice(0, 5).map((session: any) => {
+              const mins = Math.floor((session.duration_seconds || 0) / 60);
+              const date = new Date(session.created_at).toLocaleDateString("es", { day: "numeric", month: "short" });
+              const pct = session.total_exercises > 0
+                ? Math.round((session.exercises_completed / session.total_exercises) * 100)
+                : 0;
+              return (
+                <View key={session.id} style={styles.sessionRow}>
+                  <View style={styles.sessionIcon}>
+                    <Ionicons name="flame" size={18} color={Colors.accentOrange} />
+                  </View>
+                  <View style={styles.sessionInfo}>
+                    <Text style={styles.sessionName}>
+                      {session.client_nombre} {session.client_apellido}
+                    </Text>
+                    <Text style={styles.sessionDetail}>
+                      {session.routine_nombre || "Sin rutina"} · {mins} min · {pct}%
+                    </Text>
+                  </View>
+                  <Text style={styles.sessionDate}>{date}</Text>
+                </View>
+              );
+            })}
+          </>
         )}
 
         {/* Logout */}
@@ -558,5 +601,41 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
     fontSize: 15,
     color: Colors.error,
+  },
+  sessionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 12,
+  },
+  sessionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: Colors.accentOrange + "22",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sessionInfo: { flex: 1 },
+  sessionName: {
+    fontFamily: "Outfit_600SemiBold",
+    fontSize: 14,
+    color: Colors.text,
+  },
+  sessionDetail: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  sessionDate: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 12,
+    color: Colors.textMuted,
   },
 });
