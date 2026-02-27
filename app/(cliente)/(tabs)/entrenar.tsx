@@ -56,21 +56,47 @@ export default function EntrenarScreen() {
   const [phase, setPhase] = useState<WorkoutPhase>("select");
   const [selectedRoutine, setSelectedRoutine] = useState<Routine | null>(null);
   const [exercises, setExercises] = useState<Exercise[]>([]);
-  const [currentIdx, setCurrentIdx] = useState(0);
-  const [totalSeconds, setTotalSeconds] = useState(0);
-  const [exerciseSeconds, setExerciseSeconds] = useState(0);
-  const [restSeconds, setRestSeconds] = useState(60);
-  const [restCountdown, setRestCountdown] = useState(60);
+
+  const [currentExIdx, setCurrentExIdx] = useState(0);
+  const [currentSet, setCurrentSet] = useState(1);
+  const [setsCompleted, setSetsCompleted] = useState(0);
   const [exercisesCompleted, setExercisesCompleted] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+
+  const [totalSeconds, setTotalSeconds] = useState(0);
+  const [setSeconds, setSetSeconds] = useState(0);
+  const [restCountdown, setRestCountdown] = useState(60);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const totalTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const exerciseTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const setTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const restTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const videoStartRef = useRef<number | null>(null);
+  const isPausedRef = useRef(false);
+  const restTypeRef = useRef<"set" | "exercise">("set");
+  const bgTimeRef = useRef<number | null>(null);
+  const phaseRef = useRef<WorkoutPhase>("select");
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
-  const { data: routinesData, isLoading: loadingRoutines } = useQuery({
+  const totalSecondsRef = useRef(0);
+  const sessionIdRef = useRef<string | null>(null);
+  const exercisesRef = useRef<Exercise[]>([]);
+  const selectedRoutineRef = useRef<Routine | null>(null);
+  const currentExIdxRef = useRef(0);
+  const currentSetRef = useRef(1);
+  const exercisesCompletedRef = useRef(0);
+  const setsCompletedRef = useRef(0);
+
+  useEffect(() => { totalSecondsRef.current = totalSeconds; }, [totalSeconds]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => { exercisesRef.current = exercises; }, [exercises]);
+  useEffect(() => { selectedRoutineRef.current = selectedRoutine; }, [selectedRoutine]);
+  useEffect(() => { currentExIdxRef.current = currentExIdx; }, [currentExIdx]);
+  useEffect(() => { currentSetRef.current = currentSet; }, [currentSet]);
+  useEffect(() => { exercisesCompletedRef.current = exercisesCompleted; }, [exercisesCompleted]);
+  useEffect(() => { setsCompletedRef.current = setsCompleted; }, [setsCompleted]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+
+  const { data: routinesData } = useQuery({
     queryKey: ["/api/routines"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/routines");
@@ -95,18 +121,8 @@ export default function EntrenarScreen() {
       });
       return res.json();
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/training-sessions"] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/training-sessions"] }),
     onError: (err) => console.warn("[entrenar] finishSession error:", err),
-  });
-
-  const videoSessionMutation = useMutation({
-    mutationFn: async (data: { exerciseId: string; exerciseNombre: string; watchedSeconds: number; completed: boolean }) => {
-      const res = await apiRequest("POST", "/api/video-sessions", data);
-      return res.json();
-    },
-    onError: (err) => console.warn("[entrenar] videoSession error:", err),
   });
 
   const sendSummaryMutation = useMutation({
@@ -118,165 +134,211 @@ export default function EntrenarScreen() {
       });
       return res.json();
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/chat/conversations"] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/chat/conversations"] }),
     onError: (err) => console.warn("[entrenar] sendSummary error:", err),
   });
 
   const stopAllTimers = useCallback(() => {
-    if (totalTimerRef.current) clearInterval(totalTimerRef.current);
-    if (exerciseTimerRef.current) clearInterval(exerciseTimerRef.current);
-    if (restTimerRef.current) clearInterval(restTimerRef.current);
-  }, []);
-
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", async (nextState) => {
-      if (appStateRef.current === "background" && nextState === "active") {
-        if (videoStartRef.current) {
-          const elapsed = Math.round((Date.now() - videoStartRef.current) / 1000);
-          const ex = exercises[currentIdx];
-          if (ex && elapsed > 2) {
-            videoSessionMutation.mutate({
-              exerciseId: ex.id,
-              exerciseNombre: ex.nombre,
-              watchedSeconds: elapsed,
-              completed: elapsed > 30,
-            });
-          }
-          videoStartRef.current = null;
-        }
-      }
-      appStateRef.current = nextState;
-    });
-    return () => sub.remove();
-  }, [exercises, currentIdx]);
-
-  useEffect(() => {
-    return () => stopAllTimers();
+    if (totalTimerRef.current) { clearInterval(totalTimerRef.current); totalTimerRef.current = null; }
+    if (setTimerRef.current) { clearInterval(setTimerRef.current); setTimerRef.current = null; }
+    if (restTimerRef.current) { clearInterval(restTimerRef.current); restTimerRef.current = null; }
   }, []);
 
   const startTotalTimer = useCallback(() => {
+    if (totalTimerRef.current) clearInterval(totalTimerRef.current);
     totalTimerRef.current = setInterval(() => {
-      setTotalSeconds(prev => prev + 1);
+      if (!isPausedRef.current) setTotalSeconds(prev => prev + 1);
     }, 1000);
   }, []);
 
-  const startExerciseTimer = useCallback(() => {
-    setExerciseSeconds(0);
-    if (exerciseTimerRef.current) clearInterval(exerciseTimerRef.current);
-    exerciseTimerRef.current = setInterval(() => {
-      setExerciseSeconds(prev => prev + 1);
+  const startSetTimer = useCallback(() => {
+    setSetSeconds(0);
+    if (setTimerRef.current) clearInterval(setTimerRef.current);
+    setTimerRef.current = setInterval(() => {
+      if (!isPausedRef.current) setSetSeconds(prev => prev + 1);
     }, 1000);
   }, []);
 
   const startRestTimer = useCallback((seconds: number) => {
-    setRestCountdown(seconds);
     if (restTimerRef.current) clearInterval(restTimerRef.current);
+    setRestCountdown(seconds);
     restTimerRef.current = setInterval(() => {
-      setRestCountdown(prev => {
-        if (prev <= 1) {
-          clearInterval(restTimerRef.current!);
-          return 0;
-        }
-        return prev - 1;
-      });
+      if (!isPausedRef.current) {
+        setRestCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(restTimerRef.current!);
+            restTimerRef.current = null;
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
     }, 1000);
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+      if (appStateRef.current === "active" && nextState === "background") {
+        bgTimeRef.current = Date.now();
+      }
+      if (appStateRef.current === "background" && nextState === "active") {
+        if (bgTimeRef.current && !isPausedRef.current) {
+          const elapsed = Math.round((Date.now() - bgTimeRef.current) / 1000);
+          const p = phaseRef.current;
+          if (p === "working") {
+            setTotalSeconds(prev => prev + elapsed);
+            setSetSeconds(prev => prev + elapsed);
+          } else if (p === "resting") {
+            setTotalSeconds(prev => prev + elapsed);
+            setRestCountdown(prev => Math.max(0, prev - elapsed));
+          }
+        }
+        bgTimeRef.current = null;
+      }
+      appStateRef.current = nextState;
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => () => stopAllTimers(), []);
+
+  const togglePause = useCallback(() => {
+    const next = !isPausedRef.current;
+    isPausedRef.current = next;
+    setIsPaused(next);
+    if (!next) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
   }, []);
 
   const loadRoutineDetail = async (routine: Routine) => {
     try {
       const res = await apiRequest("GET", `/api/routines/${routine.id}`);
       const data = await res.json();
-      setExercises(data.exercises || []);
+      const exList: Exercise[] = data.exercises || [];
+
+      setExercises(exList);
       setSelectedRoutine(routine);
-      setCurrentIdx(0);
-      setTotalSeconds(0);
-      setExerciseSeconds(0);
+      setCurrentExIdx(0);
+      setCurrentSet(1);
+      setSetsCompleted(0);
       setExercisesCompleted(0);
+      setTotalSeconds(0);
+      setSetSeconds(0);
+      setIsPaused(false);
+      isPausedRef.current = false;
       setPhase("working");
+
       startTotalTimer();
-      startExerciseTimer();
+      startSetTimer();
 
       const session = await startSessionMutation.mutateAsync({
         routineId: routine.id,
         routineNombre: routine.nombre,
-        totalExercises: data.exercises?.length || 0,
+        totalExercises: exList.length,
       });
       setSessionId(session.session?.id || null);
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "No se pudo cargar la rutina");
     }
   };
 
-  const completeExercise = useCallback(() => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    if (exerciseTimerRef.current) clearInterval(exerciseTimerRef.current);
-    const newCompleted = exercisesCompleted + 1;
-    setExercisesCompleted(newCompleted);
-
-    const ex = exercises[currentIdx];
-    const rest = parseRestSeconds(ex?.descanso);
-    setRestSeconds(rest);
-
-    if (currentIdx >= exercises.length - 1) {
-      finishWorkout(newCompleted);
-    } else {
-      setPhase("resting");
-      startRestTimer(rest);
-    }
-  }, [exercisesCompleted, exercises, currentIdx]);
-
-  const continueAfterRest = useCallback(() => {
-    if (restTimerRef.current) clearInterval(restTimerRef.current);
-    const nextIdx = currentIdx + 1;
-    setCurrentIdx(nextIdx);
-    setPhase("working");
-    startExerciseTimer();
-  }, [currentIdx]);
-
-  const finishWorkout = useCallback(async (completed: number) => {
+  const finishWorkout = useCallback(async (completed: number, setsCompl: number) => {
     stopAllTimers();
     setPhase("complete");
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    if (sessionId) {
-      await finishSessionMutation.mutateAsync({
-        id: sessionId,
-        durationSeconds: totalSeconds,
+    const currentTotal = totalSecondsRef.current;
+    const sid = sessionIdRef.current;
+    const exList = exercisesRef.current;
+    const selRoutine = selectedRoutineRef.current;
+
+    if (sid) {
+      finishSessionMutation.mutate({
+        id: sid,
+        durationSeconds: currentTotal,
         exercisesCompleted: completed,
       });
     }
 
     const routines = routinesData?.routines || [];
-    const routine = routines.find((r: any) => r.id === selectedRoutine?.id);
+    const routine = routines.find((r: any) => r.id === selRoutine?.id);
     const trainerId = routine?.trainer_id;
     if (trainerId) {
-      const mins = Math.floor(totalSeconds / 60);
+      const mins = Math.floor(currentTotal / 60);
+      const totalSetsInRoutine = exList.reduce((sum, ex) => sum + (ex.series || 1), 0);
       sendSummaryMutation.mutate({
         receiverId: trainerId,
-        contenido: `✅ ¡Entrenamiento completado!\n📋 Rutina: ${selectedRoutine?.nombre}\n⏱️ Duración: ${mins} min\n💪 Ejercicios: ${completed}/${exercises.length}`,
+        contenido: `✅ ¡Entrenamiento completado!\n📋 Rutina: ${selRoutine?.nombre}\n⏱️ Duración: ${mins} min\n💪 Ejercicios: ${completed}/${exList.length}\n🔁 Series: ${setsCompl}/${totalSetsInRoutine}`,
       });
     }
 
-    sendLocalNotification("¡Entrenamiento completado!", `Completaste ${completed} ejercicio${completed !== 1 ? "s" : ""} en ${Math.floor(totalSeconds / 60)} minutos.`);
-  }, [sessionId, totalSeconds, selectedRoutine, exercises, routinesData]);
+    sendLocalNotification(
+      "¡Entrenamiento completado!",
+      `Completaste ${completed} ejercicio${completed !== 1 ? "s" : ""} en ${Math.floor(currentTotal / 60)} minutos.`
+    );
+  }, [stopAllTimers, routinesData, finishSessionMutation, sendSummaryMutation]);
 
-  const openVideo = useCallback((ex: Exercise) => {
-    videoStartRef.current = Date.now();
-  }, []);
+  const handleFinishSet = useCallback(() => {
+    const exIdx = currentExIdxRef.current;
+    const set = currentSetRef.current;
+    const exCompleted = exercisesCompletedRef.current;
+    const setsCompl = setsCompletedRef.current;
+    const exList = exercisesRef.current;
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    if (setTimerRef.current) { clearInterval(setTimerRef.current); setTimerRef.current = null; }
+
+    const ex = exList[exIdx];
+    const totalSets = ex?.series || 1;
+    const restSecs = parseRestSeconds(ex?.descanso);
+    const newSetsCompleted = setsCompl + 1;
+    setSetsCompleted(newSetsCompleted);
+
+    if (set < totalSets) {
+      restTypeRef.current = "set";
+      setPhase("resting");
+      startRestTimer(restSecs);
+    } else {
+      const newExCompleted = exCompleted + 1;
+      setExercisesCompleted(newExCompleted);
+
+      if (exIdx >= exList.length - 1) {
+        finishWorkout(newExCompleted, newSetsCompleted);
+      } else {
+        restTypeRef.current = "exercise";
+        setCurrentExIdx(exIdx + 1);
+        setCurrentSet(1);
+        setPhase("resting");
+        startRestTimer(restSecs);
+      }
+    }
+  }, [startRestTimer, finishWorkout]);
+
+  const continueAfterRest = useCallback(() => {
+    if (restTimerRef.current) { clearInterval(restTimerRef.current); restTimerRef.current = null; }
+    if (restTypeRef.current === "set") {
+      setCurrentSet(prev => prev + 1);
+    }
+    setPhase("working");
+    startSetTimer();
+  }, [startSetTimer]);
 
   const resetWorkout = useCallback(() => {
     stopAllTimers();
+    isPausedRef.current = false;
+    setIsPaused(false);
     setPhase("select");
     setSelectedRoutine(null);
     setExercises([]);
-    setCurrentIdx(0);
-    setTotalSeconds(0);
-    setExerciseSeconds(0);
+    setCurrentExIdx(0);
+    setCurrentSet(1);
+    setSetsCompleted(0);
     setExercisesCompleted(0);
+    setTotalSeconds(0);
+    setSetSeconds(0);
     setSessionId(null);
-  }, []);
+  }, [stopAllTimers]);
 
   const routines: Routine[] = routinesData?.routines || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
@@ -338,9 +400,12 @@ export default function EntrenarScreen() {
   }
 
   if (phase === "working") {
-    const ex = exercises[currentIdx];
+    const ex = exercises[currentExIdx];
     if (!ex) return null;
-    const progress = (currentIdx / exercises.length);
+    const totalSets = ex.series || 1;
+    const exerciseProgress = currentExIdx / exercises.length;
+    const setProgress = (currentSet - 1) / totalSets;
+    const overallProgress = (currentExIdx + setProgress) / exercises.length;
 
     return (
       <View style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -353,10 +418,22 @@ export default function EntrenarScreen() {
           }}>
             <Ionicons name="close" size={24} color={Colors.textSecondary} />
           </Pressable>
+
           <View style={styles.workoutHeaderCenter}>
-            <Text style={styles.workoutTitle}>{selectedRoutine?.nombre}</Text>
-            <Text style={styles.workoutProgress}>Ejercicio {currentIdx + 1} de {exercises.length}</Text>
+            <Text style={styles.workoutTitle} numberOfLines={1}>{selectedRoutine?.nombre}</Text>
+            <Text style={styles.workoutProgress}>
+              Ejercicio {currentExIdx + 1}/{exercises.length} · Serie {currentSet}/{totalSets}
+            </Text>
           </View>
+
+          <Pressable onPress={togglePause} style={styles.pauseBtn}>
+            <Ionicons
+              name={isPaused ? "play" : "pause"}
+              size={16}
+              color={Colors.primary}
+            />
+          </Pressable>
+
           <View style={styles.totalTimer}>
             <Ionicons name="timer-outline" size={14} color={Colors.primary} />
             <Text style={styles.totalTimerText}>{formatSeconds(totalSeconds)}</Text>
@@ -364,14 +441,41 @@ export default function EntrenarScreen() {
         </View>
 
         <View style={styles.progressBarWrap}>
-          <View style={[styles.progressBarFill, { width: `${progress * 100}%` as any }]} />
+          <View style={[styles.progressBarFill, { width: `${overallProgress * 100}%` as any }]} />
         </View>
+
+        {isPaused && (
+          <View style={styles.pausedBanner}>
+            <Ionicons name="pause-circle" size={16} color={Colors.primary} />
+            <Text style={styles.pausedText}>Pausado</Text>
+          </View>
+        )}
 
         <ScrollView contentContainerStyle={styles.workoutContent} showsVerticalScrollIndicator={false}>
           <View style={styles.exerciseCard}>
+            <View style={styles.phaseRow}>
+              <View style={styles.phaseBadge}>
+                <Ionicons name="flame" size={12} color={Colors.primaryText} />
+                <Text style={styles.phaseBadgeText}>Entrenando</Text>
+              </View>
+              <View style={styles.setIndicatorRow}>
+                {Array.from({ length: totalSets }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.setDot,
+                      i < currentSet - 1 && styles.setDotDone,
+                      i === currentSet - 1 && styles.setDotActive,
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text style={styles.setLabel}>Serie {currentSet}/{totalSets}</Text>
+            </View>
+
             <View style={styles.exerciseTimerCircle}>
-              <Text style={styles.exerciseTimerText}>{formatSeconds(exerciseSeconds)}</Text>
-              <Text style={styles.exerciseTimerLabel}>tiempo</Text>
+              <Text style={styles.exerciseTimerText}>{formatSeconds(setSeconds)}</Text>
+              <Text style={styles.exerciseTimerLabel}>tiempo serie</Text>
             </View>
 
             <Text style={styles.exerciseName}>{ex.nombre}</Text>
@@ -389,7 +493,7 @@ export default function EntrenarScreen() {
                 <Text style={styles.exerciseStatVal}>{ex.repeticiones}</Text>
                 <Text style={styles.exerciseStatLabel}>Reps</Text>
               </View>
-              {ex.peso && (
+              {ex.peso ? (
                 <>
                   <View style={styles.exerciseStatDivider} />
                   <View style={styles.exerciseStat}>
@@ -397,8 +501,8 @@ export default function EntrenarScreen() {
                     <Text style={styles.exerciseStatLabel}>Peso</Text>
                   </View>
                 </>
-              )}
-              {ex.descanso && (
+              ) : null}
+              {ex.descanso ? (
                 <>
                   <View style={styles.exerciseStatDivider} />
                   <View style={styles.exerciseStat}>
@@ -406,31 +510,39 @@ export default function EntrenarScreen() {
                     <Text style={styles.exerciseStatLabel}>Descanso</Text>
                   </View>
                 </>
-              )}
+              ) : null}
             </View>
 
-            {ex.video_url && (
+            {ex.video_url ? (
               <View style={styles.videoInlineWrapper}>
                 <InlineVideo uri={ex.video_url} />
               </View>
-            )}
+            ) : null}
           </View>
 
           <Pressable
-            style={({ pressed }) => [styles.completeBtn, pressed && { opacity: 0.9 }]}
-            onPress={completeExercise}
+            style={({ pressed }) => [styles.finishSetBtn, pressed && { opacity: 0.9 }]}
+            onPress={handleFinishSet}
+            testID="finish-set-btn"
           >
             <Ionicons name="checkmark-circle" size={24} color={Colors.primaryText} />
-            <Text style={styles.completeBtnText}>
-              {currentIdx >= exercises.length - 1 ? "Finalizar Entrenamiento" : "Ejercicio Completado"}
-            </Text>
+            <Text style={styles.finishSetBtnText}>Finalizar serie</Text>
           </Pressable>
+
+          {currentExIdx >= exercises.length - 1 && currentSet >= totalSets && (
+            <Text style={styles.lastSetHint}>Última serie del último ejercicio</Text>
+          )}
         </ScrollView>
       </View>
     );
   }
 
   if (phase === "resting") {
+    const isRestBetweenSets = restTypeRef.current === "set";
+    const nextEx = exercises[currentExIdx];
+    const nextSetNum = isRestBetweenSets ? currentSet + 1 : 1;
+    const nextExName = isRestBetweenSets ? nextEx?.nombre : exercises[currentExIdx]?.nombre;
+
     return (
       <View style={{ flex: 1, backgroundColor: Colors.background, alignItems: "center", justifyContent: "center" }}>
         <View style={[styles.totalTimer, styles.totalTimerTop, { top: topInset + 20 }]}>
@@ -438,22 +550,51 @@ export default function EntrenarScreen() {
           <Text style={styles.totalTimerText}>{formatSeconds(totalSeconds)}</Text>
         </View>
 
+        {isPaused && (
+          <View style={[styles.pausedBanner, { marginBottom: 16 }]}>
+            <Ionicons name="pause-circle" size={16} color={Colors.primary} />
+            <Text style={styles.pausedText}>Pausado</Text>
+          </View>
+        )}
+
         <Text style={styles.restLabel}>Descansando</Text>
+
         <View style={styles.restCircle}>
           <Text style={styles.restCountdown}>{formatSeconds(restCountdown)}</Text>
           <Text style={styles.restSub}>descanso</Text>
         </View>
 
-        <Text style={styles.nextUpLabel}>Siguiente</Text>
-        <Text style={styles.nextExerciseName}>{exercises[currentIdx + 1]?.nombre || ""}</Text>
+        <View style={styles.nextUpBlock}>
+          <Text style={styles.nextUpLabel}>
+            {isRestBetweenSets ? `Serie ${nextSetNum}` : "Siguiente ejercicio"}
+          </Text>
+          <Text style={styles.nextExerciseName}>{nextExName || ""}</Text>
+          {isRestBetweenSets && nextEx && (
+            <Text style={styles.nextSetSub}>
+              Serie {nextSetNum} de {nextEx.series} · {nextEx.repeticiones} reps
+              {nextEx.peso ? ` · ${nextEx.peso}` : ""}
+            </Text>
+          )}
+        </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.skipRestBtn, pressed && { opacity: 0.85 }]}
-          onPress={continueAfterRest}
-        >
-          <Ionicons name="play-skip-forward" size={20} color={Colors.primaryText} />
-          <Text style={styles.skipRestText}>Continuar</Text>
-        </Pressable>
+        <View style={styles.restActions}>
+          <Pressable
+            style={({ pressed }) => [styles.pauseRestBtn, pressed && { opacity: 0.85 }]}
+            onPress={togglePause}
+          >
+            <Ionicons name={isPaused ? "play" : "pause"} size={18} color={Colors.text} />
+            <Text style={styles.pauseRestText}>{isPaused ? "Reanudar" : "Pausar"}</Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.skipRestBtn, pressed && { opacity: 0.85 }]}
+            onPress={continueAfterRest}
+            testID="skip-rest-btn"
+          >
+            <Ionicons name="play-skip-forward" size={20} color={Colors.primaryText} />
+            <Text style={styles.skipRestText}>Saltar descanso</Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
@@ -461,6 +602,8 @@ export default function EntrenarScreen() {
   if (phase === "complete") {
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
+    const totalSetsInRoutine = exercises.reduce((sum, ex) => sum + (ex.series || 1), 0);
+
     return (
       <View style={{ flex: 1, backgroundColor: Colors.background }}>
         <ScrollView contentContainerStyle={[styles.completeContent, { paddingTop: topInset + 40 }]}>
@@ -473,7 +616,7 @@ export default function EntrenarScreen() {
           <View style={styles.completeSummary}>
             <View style={styles.completeStat}>
               <Text style={styles.completeStatVal}>{mins}:{String(secs).padStart(2, "0")}</Text>
-              <Text style={styles.completeStatLabel}>Duración total</Text>
+              <Text style={styles.completeStatLabel}>Duración</Text>
             </View>
             <View style={styles.completeStatDivider} />
             <View style={styles.completeStat}>
@@ -482,16 +625,16 @@ export default function EntrenarScreen() {
             </View>
             <View style={styles.completeStatDivider} />
             <View style={styles.completeStat}>
-              <Text style={styles.completeStatVal}>{exercises.length > 0 ? Math.round((exercisesCompleted / exercises.length) * 100) : 0}%</Text>
-              <Text style={styles.completeStatLabel}>Completado</Text>
+              <Text style={styles.completeStatVal}>{setsCompleted}/{totalSetsInRoutine}</Text>
+              <Text style={styles.completeStatLabel}>Series</Text>
             </View>
           </View>
 
           <Pressable
-            style={({ pressed }) => [styles.completeBtn, styles.completeBtnFull, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [styles.finishSetBtn, styles.finishSetBtnFull, pressed && { opacity: 0.85 }]}
             onPress={resetWorkout}
           >
-            <Text style={styles.completeBtnText}>Volver al inicio</Text>
+            <Text style={styles.finishSetBtnText}>Volver al inicio</Text>
           </Pressable>
         </ScrollView>
       </View>
@@ -605,20 +748,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
     paddingBottom: 12,
-    gap: 12,
+    gap: 10,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
   workoutHeaderCenter: { flex: 1 },
   workoutTitle: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 16,
+    fontSize: 15,
     color: Colors.text,
   },
   workoutProgress: {
     fontFamily: "Outfit_400Regular",
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textMuted,
+    marginTop: 1,
+  },
+  pauseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.primary + "22",
+    alignItems: "center",
+    justifyContent: "center",
   },
   totalTimer: {
     flexDirection: "row",
@@ -647,11 +799,29 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderRadius: 2,
   },
+  pausedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: Colors.primary + "22",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    marginHorizontal: 20,
+    marginTop: 8,
+    borderRadius: 12,
+    alignSelf: "stretch",
+    justifyContent: "center",
+  },
+  pausedText: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 13,
+    color: Colors.primary,
+  },
   workoutContent: {
     paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingTop: 20,
     paddingBottom: 120,
-    gap: 20,
+    gap: 16,
   },
   exerciseCard: {
     backgroundColor: Colors.card,
@@ -659,65 +829,111 @@ const styles = StyleSheet.create({
     padding: 24,
     borderWidth: 1,
     borderColor: Colors.border,
+    gap: 16,
+  },
+  phaseRow: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+  },
+  phaseBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  phaseBadgeText: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 11,
+    color: Colors.primaryText,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  setIndicatorRow: {
+    flexDirection: "row",
+    gap: 5,
+    flex: 1,
+  },
+  setDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.border,
+  },
+  setDotDone: {
+    backgroundColor: Colors.primary,
+  },
+  setDotActive: {
+    backgroundColor: Colors.primary,
+    width: 20,
+    borderRadius: 4,
+  },
+  setLabel: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 13,
+    color: Colors.text,
   },
   exerciseTimerCircle: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    alignSelf: "center",
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: Colors.primary + "15",
     borderWidth: 3,
-    borderColor: Colors.primary,
+    borderColor: Colors.primary + "40",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 24,
-    backgroundColor: Colors.primary + "11",
   },
   exerciseTimerText: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 36,
+    fontSize: 30,
     color: Colors.primary,
     letterSpacing: -1,
   },
   exerciseTimerLabel: {
     fontFamily: "Outfit_400Regular",
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.textMuted,
     marginTop: 2,
   },
   exerciseName: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 24,
+    fontSize: 22,
     color: Colors.text,
-    textAlign: "center",
-    marginBottom: 8,
+    letterSpacing: -0.3,
   },
   exerciseDesc: {
     fontFamily: "Outfit_400Regular",
     fontSize: 14,
     color: Colors.textSecondary,
-    textAlign: "center",
     lineHeight: 20,
-    marginBottom: 20,
   },
   exerciseStats: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
-    marginBottom: 20,
-    flexWrap: "wrap",
-    justifyContent: "center",
+    backgroundColor: Colors.background,
+    borderRadius: 16,
+    padding: 16,
   },
-  exerciseStat: { alignItems: "center", minWidth: 48 },
+  exerciseStat: {
+    flex: 1,
+    alignItems: "center",
+    gap: 4,
+  },
   exerciseStatVal: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 22,
+    fontSize: 18,
     color: Colors.text,
   },
   exerciseStatLabel: {
     fontFamily: "Outfit_400Regular",
     fontSize: 11,
     color: Colors.textMuted,
-    marginTop: 2,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   exerciseStatDivider: {
     width: 1,
@@ -727,76 +943,123 @@ const styles = StyleSheet.create({
   videoInlineWrapper: {
     borderRadius: 12,
     overflow: "hidden",
-    marginTop: 8,
   },
-  completeBtn: {
+  finishSetBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
     backgroundColor: Colors.primary,
-    borderRadius: 16,
+    borderRadius: 18,
     paddingVertical: 18,
+    paddingHorizontal: 24,
   },
-  completeBtnText: {
+  finishSetBtnFull: {
+    marginTop: 8,
+  },
+  finishSetBtnText: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 16,
+    fontSize: 17,
     color: Colors.primaryText,
   },
-  restLabel: {
+  lastSetHint: {
     fontFamily: "Outfit_400Regular",
-    fontSize: 18,
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: "center",
+  },
+  restLabel: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 16,
     color: Colors.textSecondary,
-    marginBottom: 32,
+    textTransform: "uppercase",
+    letterSpacing: 2,
+    marginBottom: 20,
   },
   restCircle: {
-    width: 200,
-    height: 200,
-    borderRadius: 100,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: Colors.primary + "15",
     borderWidth: 4,
-    borderColor: Colors.accent,
+    borderColor: Colors.primary + "40",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.accent + "11",
-    marginBottom: 40,
+    marginBottom: 32,
   },
   restCountdown: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 56,
-    color: Colors.accent,
+    fontSize: 48,
+    color: Colors.primary,
     letterSpacing: -2,
   },
   restSub: {
     fontFamily: "Outfit_400Regular",
     fontSize: 13,
     color: Colors.textMuted,
+    marginTop: 2,
+  },
+  nextUpBlock: {
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 36,
+    paddingHorizontal: 40,
   },
   nextUpLabel: {
     fontFamily: "Outfit_400Regular",
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.textMuted,
-    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 1,
   },
   nextExerciseName: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 20,
+    fontSize: 22,
     color: Colors.text,
-    marginBottom: 40,
-    paddingHorizontal: 20,
     textAlign: "center",
   },
-  skipRestBtn: {
+  nextSetSub: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: "center",
+    marginTop: 2,
+  },
+  restActions: {
+    flexDirection: "row",
+    gap: 12,
+    paddingHorizontal: 20,
+  },
+  pauseRestBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 8,
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  pauseRestText: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 15,
+    color: Colors.text,
+  },
+  skipRestBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
     backgroundColor: Colors.primary,
     borderRadius: 16,
-    paddingHorizontal: 32,
-    paddingVertical: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
   },
   skipRestText: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 16,
+    fontSize: 15,
     color: Colors.primaryText,
   },
   completeContent: {
@@ -809,7 +1072,7 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: Colors.primary + "22",
+    backgroundColor: Colors.primary + "20",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
@@ -827,41 +1090,37 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     textAlign: "center",
     lineHeight: 22,
+    marginBottom: 8,
   },
   completeSummary: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 20,
     backgroundColor: Colors.card,
     borderRadius: 20,
-    padding: 24,
+    padding: 20,
     borderWidth: 1,
     borderColor: Colors.border,
-    marginTop: 8,
-    width: "100%",
+    alignSelf: "stretch",
+    marginBottom: 8,
   },
-  completeStat: { flex: 1, alignItems: "center" },
+  completeStat: {
+    flex: 1,
+    alignItems: "center",
+    gap: 4,
+  },
   completeStatVal: {
     fontFamily: "Outfit_700Bold",
-    fontSize: 28,
-    color: Colors.primary,
-    letterSpacing: -0.5,
+    fontSize: 22,
+    color: Colors.text,
   },
   completeStatLabel: {
     fontFamily: "Outfit_400Regular",
     fontSize: 12,
     color: Colors.textMuted,
-    marginTop: 4,
-    textAlign: "center",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   completeStatDivider: {
     width: 1,
-    height: 40,
     backgroundColor: Colors.border,
-  },
-  completeBtnFull: {
-    width: "100%",
-    marginTop: 8,
-    flexDirection: "row",
   },
 });
