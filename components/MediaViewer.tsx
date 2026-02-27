@@ -118,13 +118,36 @@ export function ChatMedia({ uri, isVideo = false, isMe }: ChatMediaProps) {
 interface UploadProgressBarProps {
   progress: number;
   visible: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }
 
-export function UploadProgressBar({ progress, visible }: UploadProgressBarProps) {
-  if (!visible) return null;
+export function UploadProgressBar({ progress, visible, error, onRetry }: UploadProgressBarProps) {
+  if (!visible && !error) return null;
+
+  if (error) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle" size={16} color={Colors.error} />
+        <Text style={styles.errorText} numberOfLines={2}>{error}</Text>
+        {onRetry && (
+          <Pressable
+            style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.7 }]}
+            onPress={onRetry}
+          >
+            <Ionicons name="refresh" size={14} color={Colors.primary} />
+            <Text style={styles.retryText}>Reintentar</Text>
+          </Pressable>
+        )}
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.progressContainer}>
-      <View style={[styles.progressBar, { width: `${progress}%` as any }]} />
+    <View style={styles.progressWrapper}>
+      <View style={styles.progressContainer}>
+        <View style={[styles.progressBar, { width: `${progress}%` as any }]} />
+      </View>
       <Text style={styles.progressText}>{progress}%</Text>
     </View>
   );
@@ -238,13 +261,14 @@ const styles = StyleSheet.create({
     width: SCREEN_W,
     height: SCREEN_H * 0.8,
   },
+  progressWrapper: {
+    marginVertical: 6,
+  },
   progressContainer: {
     height: 4,
     backgroundColor: Colors.border,
     borderRadius: 2,
     overflow: "hidden",
-    marginVertical: 6,
-    position: "relative",
   },
   progressBar: {
     height: "100%",
@@ -252,11 +276,42 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
   progressText: {
-    position: "absolute",
-    right: 0,
-    top: -16,
     fontFamily: "Outfit_400Regular",
     fontSize: 11,
     color: Colors.textMuted,
+    marginTop: 3,
+    textAlign: "right",
+  },
+  errorContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(239,68,68,0.1)",
+    borderRadius: 8,
+    padding: 8,
+    marginVertical: 6,
+    flexWrap: "wrap",
+  },
+  errorText: {
+    flex: 1,
+    fontFamily: "Outfit_400Regular",
+    fontSize: 12,
+    color: Colors.error,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: Colors.card,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  retryText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 12,
+    color: Colors.primary,
   },
 });

@@ -23,11 +23,31 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+function safeExtFromMime(mime: string): string {
+  if (!mime) return ".jpg";
+  if (mime.includes("mp4")) return ".mp4";
+  if (mime.includes("mov")) return ".mov";
+  if (mime.includes("avi")) return ".avi";
+  if (mime.includes("webm")) return ".webm";
+  if (mime.includes("video")) return ".mp4";
+  if (mime.includes("gif")) return ".gif";
+  if (mime.includes("png")) return ".png";
+  if (mime.includes("webp")) return ".webp";
+  return ".jpg";
+}
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
   filename: (_req, file, cb) => {
     const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
+    const originalName = file.originalname || "";
+    let ext = "";
+    try {
+      ext = originalName.includes(".") ? path.extname(originalName) : "";
+    } catch {}
+    if (!ext) ext = safeExtFromMime(file.mimetype);
+    console.log("[upload] Storing file:", { originalName, mime: file.mimetype, ext });
+    cb(null, unique + ext);
   },
 });
 
@@ -36,10 +56,14 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = /jpeg|jpg|png|gif|mp4|mov|avi|webm|webp/;
-    const ext = allowed.test(path.extname(file.originalname).toLowerCase());
-    const mime = allowed.test(file.mimetype);
+    const originalName = file.originalname || "";
+    let ext = false;
+    try {
+      ext = originalName.includes(".") ? allowed.test(path.extname(originalName).toLowerCase()) : false;
+    } catch {}
+    const mime = allowed.test(file.mimetype || "");
     if (ext || mime) return cb(null, true);
-    cb(new Error("Tipo de archivo no permitido"));
+    cb(new Error("Tipo de archivo no permitido: " + (file.mimetype || "desconocido")));
   },
 });
 

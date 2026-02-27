@@ -59,7 +59,7 @@ export default function ClienteChatDetailScreen() {
   const { id, nombre } = useLocalSearchParams<{ id: string; nombre: string }>();
   const qc = useQueryClient();
   const [text, setText] = useState("");
-  const { uploading, progress, pickAndUpload, reset: resetUpload } = useUpload();
+  const { uploading, progress, error: uploadError, pickAndUpload, reset: resetUpload } = useUpload();
 
   const { data } = useQuery({
     queryKey: ["/api/chat", id],
@@ -149,11 +149,21 @@ export default function ClienteChatDetailScreen() {
         }
       />
 
-      {/* Upload progress */}
-      {uploading && (
+      {/* Upload progress / error */}
+      {(uploading || !!uploadError) && (
         <View style={styles.uploadBar}>
-          <ActivityIndicator color={Colors.primary} size="small" />
-          <Text style={styles.uploadText}>Subiendo... {progress}%</Text>
+          {uploading && <ActivityIndicator color={Colors.primary} size="small" />}
+          <View style={{ flex: 1 }}>
+            <UploadProgressBar
+              progress={progress}
+              visible={uploading}
+              error={uploadError}
+              onRetry={uploadError ? () => { resetUpload(); handlePickMedia(); } : undefined}
+            />
+            {uploading && (
+              <Text style={styles.uploadText}>Subiendo... {progress}%</Text>
+            )}
+          </View>
         </View>
       )}
 
