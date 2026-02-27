@@ -6,13 +6,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
-import * as ImagePicker from "expo-image-picker";
-import { File } from "expo-file-system";
-import { fetch as expoFetch } from "expo/fetch";
 import Colors from "@/constants/colors";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest } from "@/lib/query-client";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/auth";
+import { useUpload } from "@/hooks/useUpload";
+import { UploadProgressBar } from "@/components/MediaViewer";
 
 export default function ProgresoTrainerScreen() {
   const insets = useSafeAreaInsets();
@@ -27,9 +26,8 @@ export default function ProgresoTrainerScreen() {
   const [cintura, setCintura] = useState("");
   const [notas, setNotas] = useState("");
   const [fotoUrl, setFotoUrl] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState("");
+  const photoUpload = useUpload();
   const [refreshing, setRefreshing] = useState(false);
 
   const { data: clientsData } = useQuery({
@@ -82,6 +80,7 @@ export default function ProgresoTrainerScreen() {
     setPeso(""); setGrasa(""); setMusculo(""); setCintura("");
     setNotas(""); setFotoUrl(""); setError("");
     setFecha(new Date().toISOString().split("T")[0]);
+    photoUpload.reset();
   };
 
   const onRefresh = useCallback(async () => {
@@ -91,51 +90,11 @@ export default function ProgresoTrainerScreen() {
   }, [targetClientId]);
 
   const pickPhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: "images",
-      quality: 0.8,
-    });
-    if (result.canceled || !result.assets[0]) return;
-
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      const asset = result.assets[0];
-      const uri = asset.uri;
-      const name = asset.fileName || "progress.jpg";
-      const type = asset.mimeType || "image/jpeg";
-
-      const formData = new FormData();
-      const fileObj = new File([{ uri } as any], name, { type });
-      formData.append("file", fileObj as any);
-
-      const baseUrl = getApiUrl();
-      const uploadUrl = new URL("/api/upload", baseUrl).toString();
-
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress = Math.min(progress + 15, 90);
-        setUploadProgress(progress);
-      }, 200);
-
-      const res = await expoFetch(uploadUrl, {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-
-      clearInterval(interval);
-      setUploadProgress(100);
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message);
-      setFotoUrl(data.url);
-    } catch (err: any) {
-      setError("Error al subir imagen: " + err.message);
-    } finally {
-      setUploading(false);
+    photoUpload.reset();
+    const result = await photoUpload.pickAndUpload("images");
+    if (result) {
+      setFotoUrl(result.url);
+      console.log("[progreso-trainer] Foto subida:", result.url);
     }
   };
 
@@ -367,12 +326,12 @@ export default function ProgresoTrainerScreen() {
           <Pressable
             style={({ pressed }) => [styles.photoBtn, pressed && { opacity: 0.8 }]}
             onPress={pickPhoto}
-            disabled={uploading}
+            disabled={photoUpload.uploading}
           >
-            {uploading ? (
+            {photoUpload.uploading ? (
               <View style={styles.uploadingRow}>
                 <ActivityIndicator color={Colors.primary} size="small" />
-                <Text style={styles.photoBtnText}>Subiendo... {uploadProgress}%</Text>
+                <Text style={styles.photoBtnText}>Subiendo... {photoUpload.progress}%</Text>
               </View>
             ) : fotoUrl ? (
               <View style={styles.uploadingRow}>
@@ -386,6 +345,12 @@ export default function ProgresoTrainerScreen() {
               </View>
             )}
           </Pressable>
+          <UploadProgressBar
+            visible={photoUpload.uploading}
+            progress={photoUpload.progress}
+            error={photoUpload.error}
+            onRetry={photoUpload.error ? () => { photoUpload.reset(); pickPhoto(); } : undefined}
+          />
           {fotoUrl ? (
             <Image source={{ uri: fotoUrl }} style={styles.previewImg} resizeMode="cover" />
           ) : null}
@@ -393,14 +358,15 @@ export default function ProgresoTrainerScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.confirmBtn,
-              (createMutation.isPending || uploading) && styles.btnDisabled,
+              (createMutation.isPending || photoUpload.uploading) && styles.btnDisabled,
               pressed && { opacity: 0.85 },
             ]}
             onPress={() => {
               if (!fecha) return setError("La fecha es requerida");
+              if (photoUpload.uploading) return setError("Espera a que termine la subida");
               createMutation.mutate();
             }}
-            disabled={createMutation.isPending || uploading}
+            disabled={createMutation.isPending || photoUpload.uploading}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={Colors.primaryText} />

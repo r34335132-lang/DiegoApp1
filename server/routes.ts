@@ -183,19 +183,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/upload", requireAuth, upload.single("file"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ message: "No se encontró archivo" });
+      const port = process.env.PORT || 5000;
       const baseUrl = process.env.REPLIT_DEV_DOMAIN
-        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-        : `http://localhost:${process.env.PORT || 5000}`;
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}:${port}`
+        : `http://localhost:${port}`;
       const url = `${baseUrl}/uploads/${req.file.filename}`;
+      console.log("[upload] Archivo guardado:", req.file.filename, "| mime:", req.file.mimetype, "| size:", req.file.size, "| url:", url);
       const media = await saveMediaFile({
         uploaderId: req.session!.userId!,
         filename: req.file.filename,
-        originalName: req.file.originalname,
+        originalName: req.file.originalname || req.file.filename,
         mimeType: req.file.mimetype,
         size: req.file.size,
         url,
       });
+      console.log("[upload] Media guardada en DB:", media?.id);
       return res.json({ url, media });
+    } catch (err: any) {
+      console.error("[upload] Error:", err.message);
+      return res.status(500).json({ message: err.message });
+    }
+  });
+
+  // PROFILE AVATAR ROUTE
+  app.post("/api/profile/avatar", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No se encontró archivo" });
+      const port = process.env.PORT || 5000;
+      const baseUrl = process.env.REPLIT_DEV_DOMAIN
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}:${port}`
+        : `http://localhost:${port}`;
+      const url = `${baseUrl}/uploads/${req.file.filename}`;
+      const user = await updateUserAvatar(req.session!.userId!, url);
+      return res.json({ user });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }
@@ -453,21 +473,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const clientId = (req.query.clientId as string) || req.session!.userId!;
       const sessions = await getClientVideoSessions(clientId);
       return res.json({ sessions });
-    } catch (err: any) {
-      return res.status(500).json({ message: err.message });
-    }
-  });
-
-  // PROFILE AVATAR ROUTE
-  app.post("/api/profile/avatar", requireAuth, upload.single("file"), async (req, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ message: "No se encontró archivo" });
-      const baseUrl = process.env.REPLIT_DEV_DOMAIN
-        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-        : `http://localhost:${process.env.PORT || 5000}`;
-      const url = `${baseUrl}/uploads/${req.file.filename}`;
-      const user = await updateUserAvatar(req.session!.userId!, url);
-      return res.json({ user });
     } catch (err: any) {
       return res.status(500).json({ message: err.message });
     }

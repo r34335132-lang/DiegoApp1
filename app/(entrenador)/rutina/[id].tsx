@@ -1,17 +1,17 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, Modal, ActivityIndicator, Image,
+  Platform, Modal, ActivityIndicator, Linking,
 } from "react-native";
+import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
-import { File } from "expo-file-system";
-import { fetch as expoFetch } from "expo/fetch";
 import Colors from "@/constants/colors";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest } from "@/lib/query-client";
+import { useUpload } from "@/hooks/useUpload";
+import { UploadProgressBar } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
 
 export default function RutinaDetailScreen() {
@@ -26,9 +26,11 @@ export default function RutinaDetailScreen() {
   const [peso, setPeso] = useState("");
   const [descanso, setDescanso] = useState("60s");
   const [imagenUrl, setImagenUrl] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [videoUrl, setVideoUrl] = useState("");
   const [error, setError] = useState("");
+
+  const imgUpload = useUpload();
+  const vidUpload = useUpload();
 
   const { data, refetch } = useQuery({
     queryKey: ["/api/routines", id],
@@ -50,6 +52,7 @@ export default function RutinaDetailScreen() {
         peso: peso || undefined,
         descanso,
         imagenUrl: imagenUrl || undefined,
+        videoUrl: videoUrl || undefined,
         orden: (data?.exercises?.length || 0),
       });
       return res.json();
@@ -76,59 +79,33 @@ export default function RutinaDetailScreen() {
 
   const resetForm = () => {
     setNombre(""); setDescripcion(""); setSeries("3"); setReps("10");
-    setPeso(""); setDescanso("60s"); setImagenUrl(""); setError("");
+    setPeso(""); setDescanso("60s"); setImagenUrl(""); setVideoUrl(""); setError("");
+    imgUpload.reset();
+    vidUpload.reset();
   };
 
-  const pickMedia = async (type: "images" | "videos") => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: type,
-      quality: 0.8,
-    });
-    if (result.canceled || !result.assets[0]) return;
+  const handlePickImage = async () => {
+    imgUpload.reset();
+    const result = await imgUpload.pickAndUpload("images");
+    if (result) {
+      setImagenUrl(result.url);
+      console.log("[rutina] Imagen subida:", result.url);
+    }
+  };
 
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      const asset = result.assets[0];
-      const name = asset.fileName || (type === "images" ? "exercise.jpg" : "exercise.mp4");
-      const mimeType = asset.mimeType || (type === "images" ? "image/jpeg" : "video/mp4");
-      const formData = new FormData();
-      const fileObj = new File([{ uri: asset.uri } as any], name, { type: mimeType });
-      formData.append("file", fileObj as any);
-
-      const baseUrl = getApiUrl();
-      const uploadUrl = new URL("/api/upload", baseUrl).toString();
-
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress = Math.min(progress + 20, 90);
-        setUploadProgress(progress);
-      }, 200);
-
-      const res = await expoFetch(uploadUrl, {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-
-      clearInterval(interval);
-      setUploadProgress(100);
-
-      const uploadData = await res.json();
-      if (!res.ok) throw new Error(uploadData.message);
-      setImagenUrl(uploadData.url);
-    } catch (err: any) {
-      setError("Error al subir: " + err.message);
-    } finally {
-      setUploading(false);
+  const handlePickVideo = async () => {
+    vidUpload.reset();
+    const result = await vidUpload.pickAndUpload("videos");
+    if (result) {
+      setVideoUrl(result.url);
+      console.log("[rutina] Video subido:", result.url);
     }
   };
 
   const routine = data?.routine;
   const exercises = data?.exercises || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
+  const isUploading = imgUpload.uploading || vidUpload.uploading;
 
   if (!routine) {
     return (
@@ -144,7 +121,6 @@ export default function RutinaDetailScreen() {
         contentContainerStyle={[styles.scroll, { paddingTop: topInset + 8 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
         <View style={styles.pageHeader}>
           <Pressable
             style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
@@ -160,7 +136,6 @@ export default function RutinaDetailScreen() {
           </Pressable>
         </View>
 
-        {/* Routine Info */}
         <View style={styles.routineInfo}>
           <Text style={styles.routineName}>{routine.nombre}</Text>
           {routine.descripcion ? (
@@ -174,7 +149,6 @@ export default function RutinaDetailScreen() {
           </View>
         </View>
 
-        {/* Exercises */}
         {exercises.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="barbell-outline" size={48} color={Colors.textMuted} />
@@ -226,11 +200,31 @@ export default function RutinaDetailScreen() {
               </View>
 
               {ex.imagen_url ? (
-                <Image
-                  source={{ uri: ex.imagen_url }}
-                  style={styles.exImage}
-                  resizeMode="cover"
-                />
+                <View style={styles.mediaWrapper}>
+                  <Text style={styles.mediaLabel}>Imagen</Text>
+                  <Image
+                    source={{ uri: ex.imagen_url }}
+                    style={styles.exImage}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                  />
+                </View>
+              ) : null}
+
+              {ex.video_url ? (
+                <Pressable
+                  style={styles.videoCard}
+                  onPress={() => Linking.openURL(ex.video_url)}
+                >
+                  <View style={styles.videoPlayBtn}>
+                    <Ionicons name="play" size={22} color={Colors.primaryText} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.videoCardTitle}>Video demostrativo</Text>
+                    <Text style={styles.videoCardSub} numberOfLines={1}>{ex.video_url.split("/").pop()}</Text>
+                  </View>
+                  <Ionicons name="open-outline" size={18} color={Colors.textMuted} />
+                </Pressable>
               ) : null}
             </View>
           ))
@@ -239,7 +233,6 @@ export default function RutinaDetailScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* Add Exercise Modal */}
       <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => { setShowModal(false); resetForm(); }}>
         <Pressable style={styles.overlay} onPress={() => { setShowModal(false); resetForm(); }} />
         <ScrollView
@@ -331,49 +324,87 @@ export default function RutinaDetailScreen() {
             />
           </View>
 
-          <Text style={styles.label}>Imagen / Video</Text>
-          <View style={styles.mediaRow}>
-            <Pressable
-              style={({ pressed }) => [styles.mediaBtn, pressed && { opacity: 0.8 }]}
-              onPress={() => pickMedia("images")}
-              disabled={uploading}
-            >
-              <Ionicons name="image" size={20} color={Colors.primary} />
-              <Text style={styles.mediaBtnText}>Imagen</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [styles.mediaBtn, pressed && { opacity: 0.8 }]}
-              onPress={() => pickMedia("videos")}
-              disabled={uploading}
-            >
-              <Ionicons name="videocam" size={20} color={Colors.accentBlue} />
-              <Text style={[styles.mediaBtnText, { color: Colors.accentBlue }]}>Video</Text>
-            </Pressable>
-          </View>
-          {uploading && (
-            <View style={styles.uploadProgress}>
+          <Text style={styles.label}>Imagen de referencia</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.mediaPickBtn,
+              !!imagenUrl && styles.mediaPickBtnSuccess,
+              pressed && { opacity: 0.8 },
+            ]}
+            onPress={handlePickImage}
+            disabled={imgUpload.uploading}
+          >
+            {imgUpload.uploading ? (
               <ActivityIndicator color={Colors.primary} size="small" />
-              <Text style={styles.uploadText}>Subiendo... {uploadProgress}%</Text>
-            </View>
-          )}
+            ) : (
+              <Ionicons
+                name={imagenUrl ? "checkmark-circle" : "image-outline"}
+                size={22}
+                color={imagenUrl ? Colors.success : Colors.primary}
+              />
+            )}
+            <Text style={[styles.mediaPickBtnText, !!imagenUrl && { color: Colors.success }]}>
+              {imgUpload.uploading ? `Subiendo... ${imgUpload.progress}%` : imagenUrl ? "Imagen subida ✓" : "Seleccionar imagen"}
+            </Text>
+          </Pressable>
+          <UploadProgressBar
+            visible={imgUpload.uploading}
+            progress={imgUpload.progress}
+            error={imgUpload.error}
+            onRetry={imgUpload.error ? () => { imgUpload.reset(); handlePickImage(); } : undefined}
+          />
           {imagenUrl ? (
-            <View style={styles.uploadSuccess}>
-              <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
-              <Text style={[styles.uploadText, { color: Colors.success }]}>Archivo subido</Text>
-            </View>
+            <Image
+              source={{ uri: imagenUrl }}
+              style={styles.previewImage}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+            />
           ) : null}
+
+          <Text style={[styles.label, { marginTop: 8 }]}>Video demostrativo</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.mediaPickBtn,
+              !!videoUrl && styles.mediaPickBtnSuccess,
+              { borderColor: Colors.accentBlue + "66" },
+              pressed && { opacity: 0.8 },
+            ]}
+            onPress={handlePickVideo}
+            disabled={vidUpload.uploading}
+          >
+            {vidUpload.uploading ? (
+              <ActivityIndicator color={Colors.accentBlue} size="small" />
+            ) : (
+              <Ionicons
+                name={videoUrl ? "checkmark-circle" : "videocam-outline"}
+                size={22}
+                color={videoUrl ? Colors.success : Colors.accentBlue}
+              />
+            )}
+            <Text style={[styles.mediaPickBtnText, { color: videoUrl ? Colors.success : Colors.accentBlue }, !!videoUrl && { color: Colors.success }]}>
+              {vidUpload.uploading ? `Subiendo... ${vidUpload.progress}%` : videoUrl ? "Video subido ✓" : "Seleccionar video"}
+            </Text>
+          </Pressable>
+          <UploadProgressBar
+            visible={vidUpload.uploading}
+            progress={vidUpload.progress}
+            error={vidUpload.error}
+            onRetry={vidUpload.error ? () => { vidUpload.reset(); handlePickVideo(); } : undefined}
+          />
 
           <Pressable
             style={({ pressed }) => [
               styles.confirmBtn,
-              (addExMutation.isPending || uploading) && styles.btnDisabled,
+              (addExMutation.isPending || isUploading) && styles.btnDisabled,
               pressed && { opacity: 0.85 },
             ]}
             onPress={() => {
               if (!nombre.trim()) return setError("El nombre es requerido");
+              if (isUploading) return setError("Espera a que termine la subida");
               addExMutation.mutate();
             }}
-            disabled={addExMutation.isPending || uploading}
+            disabled={addExMutation.isPending || isUploading}
           >
             {addExMutation.isPending ? (
               <ActivityIndicator color={Colors.primaryText} />
@@ -415,9 +446,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  routineInfo: {
-    marginBottom: 24,
-  },
+  routineInfo: { marginBottom: 24 },
   routineName: {
     fontFamily: "Outfit_700Bold",
     fontSize: 28,
@@ -551,11 +580,51 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textSecondary,
   },
+  mediaWrapper: {
+    marginTop: 12,
+  },
+  mediaLabel: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 11,
+    color: Colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
   exImage: {
     width: "100%",
     height: 160,
     borderRadius: 12,
+  },
+  videoCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     marginTop: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: Colors.accentBlue + "44",
+  },
+  videoPlayBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.accentBlue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  videoCardTitle: {
+    fontFamily: "Outfit_600SemiBold",
+    fontSize: 14,
+    color: Colors.text,
+  },
+  videoCardSub: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
   },
   overlay: {
     flex: 1,
@@ -612,45 +681,58 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 0,
   },
-  mediaRow: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 12,
-  },
-  mediaBtn: {
-    flex: 1,
+  mediaPickBtn: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
+    gap: 10,
     backgroundColor: Colors.surface,
-    borderRadius: 12,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     borderWidth: 1,
     borderColor: Colors.primary + "44",
     borderStyle: "dashed",
+    marginBottom: 10,
   },
-  mediaBtnText: {
+  mediaPickBtnSuccess: {
+    borderColor: Colors.success + "66",
+    borderStyle: "solid",
+    backgroundColor: Colors.success + "0F",
+  },
+  mediaPickBtnText: {
     fontFamily: "Outfit_500Medium",
     fontSize: 14,
     color: Colors.primary,
+    flex: 1,
   },
-  uploadProgress: {
-    flexDirection: "row",
+  previewImage: {
+    width: "100%",
+    height: 140,
+    borderRadius: 12,
+    marginBottom: 14,
+  },
+  confirmBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: "center",
-    gap: 8,
-    marginBottom: 12,
+    marginTop: 8,
+    marginBottom: 10,
   },
-  uploadSuccess: {
-    flexDirection: "row",
+  btnDisabled: { opacity: 0.5 },
+  confirmBtnText: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 16,
+    color: Colors.primaryText,
+  },
+  cancelBtn: {
+    paddingVertical: 14,
     alignItems: "center",
-    gap: 8,
-    marginBottom: 12,
   },
-  uploadText: {
-    fontFamily: "Outfit_400Regular",
-    fontSize: 14,
-    color: Colors.textMuted,
+  cancelBtnText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 16,
+    color: Colors.textSecondary,
   },
   errorBox: {
     flexDirection: "row",
@@ -668,28 +750,5 @@ const styles = StyleSheet.create({
     color: Colors.error,
     fontSize: 14,
     flex: 1,
-  },
-  confirmBtn: {
-    backgroundColor: Colors.primary,
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
-    marginTop: 8,
-    marginBottom: 10,
-  },
-  btnDisabled: { opacity: 0.6 },
-  confirmBtnText: {
-    fontFamily: "Outfit_700Bold",
-    fontSize: 16,
-    color: Colors.primaryText,
-  },
-  cancelBtn: {
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  cancelBtnText: {
-    fontFamily: "Outfit_500Medium",
-    fontSize: 16,
-    color: Colors.textSecondary,
   },
 });
