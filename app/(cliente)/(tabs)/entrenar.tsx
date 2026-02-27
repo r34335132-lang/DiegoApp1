@@ -84,6 +84,7 @@ export default function EntrenarScreen() {
       const res = await apiRequest("POST", "/api/training-sessions", data);
       return res.json();
     },
+    onError: (err) => console.warn("[entrenar] startSession error:", err),
   });
 
   const finishSessionMutation = useMutation({
@@ -97,6 +98,7 @@ export default function EntrenarScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/training-sessions"] });
     },
+    onError: (err) => console.warn("[entrenar] finishSession error:", err),
   });
 
   const videoSessionMutation = useMutation({
@@ -104,6 +106,7 @@ export default function EntrenarScreen() {
       const res = await apiRequest("POST", "/api/video-sessions", data);
       return res.json();
     },
+    onError: (err) => console.warn("[entrenar] videoSession error:", err),
   });
 
   const sendSummaryMutation = useMutation({
@@ -118,6 +121,7 @@ export default function EntrenarScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/chat/conversations"] });
     },
+    onError: (err) => console.warn("[entrenar] sendSummary error:", err),
   });
 
   const stopAllTimers = useCallback(() => {

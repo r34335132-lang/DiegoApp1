@@ -30,18 +30,30 @@ interface InlineVideoProps {
   compact?: boolean;
 }
 
+const WEB_UNSUPPORTED_EXTS = [".mov", ".avi"];
+
+function isWebUnsupportedFormat(uri: string) {
+  if (Platform.OS !== "web") return false;
+  const lower = uri.toLowerCase().split("?")[0];
+  return WEB_UNSUPPORTED_EXTS.some((ext) => lower.endsWith(ext));
+}
+
 export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
   const videoRef = useRef<VideoView>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [isReady, setIsReady] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
-  const player = useVideoPlayer({ uri }, (p) => {
+  const webUnsupported = isWebUnsupportedFormat(uri);
+
+  const player = useVideoPlayer({ uri: webUnsupported ? "" : uri }, (p) => {
     p.loop = false;
     p.muted = false;
   });
 
   useEffect(() => {
+    if (webUnsupported) return;
     const playingSub = player.addListener("playingChange", ({ isPlaying: playing }) => {
       setIsPlaying(playing);
     });
@@ -59,6 +71,7 @@ export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
     });
     const statusSub = player.addListener("statusChange", ({ status }) => {
       if (status === "readyToPlay") setIsReady(true);
+      if (status === "error") setHasError(true);
     });
 
     return () => {
@@ -84,6 +97,18 @@ export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
   }, []);
 
   const controlH = compact ? 32 : 40;
+
+  if (webUnsupported || hasError) {
+    const msg = webUnsupported
+      ? "Formato no compatible con web\nUsa la app en iOS o Android"
+      : "Error al cargar el video";
+    return (
+      <View style={[styles.videoContainer, styles.unsupportedContainer, style]}>
+        <Ionicons name="videocam-off-outline" size={compact ? 24 : 32} color={Colors.textSecondary} />
+        <Text style={styles.unsupportedText}>{msg}</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.videoContainer, style]}>
@@ -349,6 +374,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#0a0a0a",
     borderRadius: 12,
     overflow: "hidden",
+  },
+  unsupportedContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 24,
+  },
+  unsupportedText: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 18,
   },
   videoElement: {
     width: "100%",

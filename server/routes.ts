@@ -109,16 +109,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
-  app.use("/uploads", (_req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    next();
-  });
-  app.use("/uploads", (req, res, next) => {
-    const filePath = path.join(uploadsDir, path.basename(req.path));
-    if (fs.existsSync(filePath)) {
-      res.sendFile(filePath);
+  const MIME_MAP: Record<string, string> = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".avi": "video/x-msvideo",
+    ".gif": "image/gif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+  };
+
+  app.get("/uploads/:filename", (req, res) => {
+    const filename = path.basename(req.params.filename);
+    const filePath = path.join(uploadsDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ message: "Archivo no encontrado" });
+      return;
+    }
+
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+
+    if (fileSize === 0) {
+      res.status(404).json({ message: "Archivo vacío" });
+      return;
+    }
+
+    const ext = path.extname(filename).toLowerCase();
+    const contentType = MIME_MAP[ext] || "application/octet-stream";
+    const rangeHeader = req.headers.range;
+
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
+
+    if (rangeHeader) {
+      const parts = rangeHeader.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+      if (isNaN(start) || start >= fileSize || end >= fileSize) {
+        res.status(416).setHeader("Content-Range", `bytes */${fileSize}`).end();
+        return;
+      }
+
+      const chunksize = end - start + 1;
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunksize,
+        "Content-Type": contentType,
+      });
+      fs.createReadStream(filePath, { start, end }).pipe(res);
     } else {
-      next();
+      res.writeHead(200, {
+        "Content-Length": fileSize,
+        "Content-Type": contentType,
+        "Accept-Ranges": "bytes",
+      });
+      fs.createReadStream(filePath).pipe(res);
     }
   });
 
