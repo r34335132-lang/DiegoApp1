@@ -11,34 +11,30 @@ import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
 import * as Haptics from "expo-haptics";
 
-// Importaciones para Supabase directo
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/auth";
 
 export default function ClientesScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { user } = useAuth(); // <-- Obtenemos el entrenador actual
+  const { user } = useAuth();
   const [showModal, setShowModal] = useState(false);
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
-  // 1. OBTENER CLIENTES E INVITACIONES DIRECTO DE SUPABASE
   const { data, refetch } = useQuery({
     queryKey: ["clients", user?.id],
     queryFn: async () => {
       if (!user?.id) return { clients: [] };
 
-      // Buscar los clientes activos que ya tienen cuenta
       const { data: clientesActivos, error: errActivos } = await supabase
         .from("perfiles")
         .select("*")
         .eq("rol", "cliente")
         .eq("entrenador_id", user.id);
 
-      // Buscar las invitaciones pendientes
       const { data: invitaciones, error: errInvitaciones } = await supabase
         .from("invitaciones")
         .select("*")
@@ -48,13 +44,11 @@ export default function ClientesScreen() {
       if (errActivos) throw new Error(errActivos.message);
       if (errInvitaciones) throw new Error(errInvitaciones.message);
 
-      // Formatear activos
       const perfilesFormateados = (clientesActivos || []).map(c => ({
         ...c,
         status: "activo"
       }));
 
-      // Formatear pendientes para que la interfaz los lea igual
       const invitacionesFormateadas = (invitaciones || []).map(inv => ({
         id: inv.id,
         invite_email: inv.email,
@@ -62,46 +56,53 @@ export default function ClientesScreen() {
         role: "cliente"
       }));
 
-      // Unir ambas listas
       return { clients: [...perfilesFormateados, ...invitacionesFormateadas] };
     },
-    enabled: !!user?.id, // Solo ejecutar si hay un usuario logueado
+    enabled: !!user?.id,
   });
 
-  // 2. CREAR O VINCULAR CLIENTE
   const addMutation = useMutation({
     mutationFn: async (inviteEmail: string) => {
       if (!user?.id) throw new Error("No autenticado");
 
-      // Paso A: Buscar si el usuario ya existe en perfiles usando el correo
+      const correoLimpio = inviteEmail.trim().toLowerCase();
+
+      // Paso A: Buscar si el usuario ya existe
       const { data: clienteExistente, error: errBusqueda } = await supabase
         .from("perfiles")
         .select("*")
-        .eq("email", inviteEmail)
-        .maybeSingle(); // maybeSingle evita que lance error si no encuentra a nadie
+        .eq("email", correoLimpio)
+        .maybeSingle();
 
       if (clienteExistente) {
-        // Si existe, verificamos que sea un cliente y no otro entrenador
         if (clienteExistente.rol !== "cliente") {
           throw new Error("Este correo pertenece a una cuenta de Entrenador.");
         }
 
-        // Lo vinculamos actualizando su entrenador_id
-        const { error: updateError } = await supabase
+        // Lo vinculamos (AGREGAMOS .select().single() PARA EVITAR FALLOS SILENCIOSOS)
+        const { data: updatedData, error: updateError } = await supabase
           .from("perfiles")
           .update({ entrenador_id: user.id })
-          .eq("id", clienteExistente.id);
+          .eq("id", clienteExistente.id)
+          .select() 
+          .single();
 
         if (updateError) throw new Error(updateError.message);
+        if (!updatedData) throw new Error("Bloqueo de base de datos. Asegúrate de ejecutar el código SQL.");
+        
         return { tipo: "vinculado" };
         
       } else {
-        // Paso B: Si no existe, lo agregamos a la tabla de invitaciones como pendiente
-        const { error: inviteError } = await supabase
+        // Paso B: Si no existe, lo invitamos (AGREGAMOS .select().single() TAMBIÉN)
+        const { data: insertedData, error: inviteError } = await supabase
           .from("invitaciones")
-          .insert([{ email: inviteEmail, entrenador_id: user.id }]);
+          .insert([{ email: correoLimpio, entrenador_id: user.id }])
+          .select()
+          .single();
 
         if (inviteError) throw new Error(inviteError.message);
+        if (!insertedData) throw new Error("Bloqueo de base de datos al invitar.");
+        
         return { tipo: "invitado" };
       }
     },
@@ -110,7 +111,6 @@ export default function ClientesScreen() {
       setShowModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Mostramos una alerta dependiendo de lo que haya sucedido
       if (resultado.tipo === "vinculado") {
         Alert.alert("¡Cliente Vinculado!", "El usuario ya tenía cuenta y ha sido agregado a tu lista exitosamente.");
       } else {
@@ -154,7 +154,6 @@ export default function ClientesScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
         }
       >
-        {/* Header */}
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Pacientes</Text>
@@ -168,7 +167,6 @@ export default function ClientesScreen() {
           </Pressable>
         </View>
 
-        {/* Search */}
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color={Colors.textMuted} />
           <TextInput
@@ -264,7 +262,6 @@ export default function ClientesScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* Add Client Modal */}
       <Modal
         visible={showModal}
         transparent

@@ -15,7 +15,7 @@ function NativeTabLayout() {
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="clientes">
         <Icon sf={{ default: "person.2", selected: "person.2.fill" }} />
-        <Label>Clientes</Label>
+        <Label>Pacientes</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="rutinas">
         <Icon sf={{ default: "dumbbell", selected: "dumbbell.fill" }} />
