@@ -1,7 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { fetch } from "expo/fetch";
-import { getApiUrl } from "@/lib/query-client";
+import { supabase } from "@/lib/supabase";
 
 interface User {
   id: string;
@@ -10,17 +8,6 @@ interface User {
   apellido: string;
   role: "entrenador" | "cliente";
   avatar_url?: string;
-  created_at?: string;
-}
-
-interface AuthContextValue {
-  user: User | null;
-  isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
-  logout: () => Promise<void>;
-  refreshUser: () => Promise<void>;
-  setUser: (user: User) => void;
 }
 
 interface RegisterData {
@@ -31,83 +18,133 @@ interface RegisterData {
   role: "entrenador" | "cliente";
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
-
-async function apiFetch(path: string, options?: RequestInit) {
-  const base = getApiUrl();
-  const url = new URL(path, base).toString();
-  return fetch(url, { ...options, credentials: "include" });
+interface AuthContextValue {
+  user: User | null;
+  isLoading: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  register: (data: RegisterData) => Promise<void>;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
+  setUser: (user: User | null) => void;
 }
+
+const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Función auxiliar para buscar los datos extra del usuario en la BD
+  const fetchProfile = async (userId: string, email: string) => {
+    const { data, error } = await supabase
+      .from("perfiles")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (data) {
+      setUser({
+        id: userId,
+        email: email,
+        nombre: data.nombre,
+        apellido: data.apellido,
+        role: data.rol, 
+        avatar_url: data.avatar_url,
+      });
+    }
+  };
+
   const refreshUser = async () => {
-    try {
-      const res = await apiFetch("/api/auth/me");
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data.user);
-        await AsyncStorage.setItem("user", JSON.stringify(data.user));
-      } else {
-        setUser(null);
-        await AsyncStorage.removeItem("user");
-      }
-    } catch {
-      const cached = await AsyncStorage.getItem("user");
-      if (cached) {
-        try {
-          setUser(JSON.parse(cached));
-        } catch {}
-      }
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      await fetchProfile(session.user.id, session.user.email || "");
+    } else {
+      setUser(null);
     }
   };
 
   useEffect(() => {
-    const init = async () => {
-      const cached = await AsyncStorage.getItem("user");
-      if (cached) {
-        try {
-          setUser(JSON.parse(cached));
-        } catch {}
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        await fetchProfile(session.user.id, session.user.email || "");
+      } else {
+        setUser(null);
       }
-      await refreshUser();
       setIsLoading(false);
+    });
+
+    refreshUser().finally(() => setIsLoading(false));
+
+    return () => {
+      subscription.unsubscribe();
     };
-    init();
   }, []);
 
   const login = async (email: string, password: string) => {
-    const res = await apiFetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || "Error al iniciar sesión");
-    setUser(data.user);
-    await AsyncStorage.setItem("user", JSON.stringify(data.user));
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(error.message);
   };
 
   const register = async (formData: RegisterData) => {
-    const res = await apiFetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formData),
+    // 1. Crear el usuario en auth
+    const { data, error: authError } = await supabase.auth.signUp({
+      email: formData.email,
+      password: formData.password,
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || "Error al registrar");
-    setUser(data.user);
-    await AsyncStorage.setItem("user", JSON.stringify(data.user));
+
+    if (authError) throw new Error(authError.message);
+    if (!data.user) throw new Error("Error desconocido al crear el usuario");
+
+    let idDelEntrenador = null;
+    let rolFinal = formData.role; // Por defecto es lo que el usuario eligió en la pantalla
+
+    // --- MAGIA APLICADA: Buscar si el correo fue invitado SIN IMPORTAR lo que eligió ---
+    const { data: invitacion } = await supabase
+      .from("invitaciones")
+      .select("entrenador_id")
+      .eq("email", formData.email)
+      .eq("estado", "pendiente")
+      .maybeSingle(); 
+
+    // Si encontramos una invitación, ignoramos el botón de la pantalla y lo forzamos a ser tu cliente
+    if (invitacion) {
+      idDelEntrenador = invitacion.entrenador_id;
+      rolFinal = "cliente"; 
+
+      await supabase
+        .from("invitaciones")
+        .update({ estado: "aceptada" })
+        .eq("email", formData.email);
+    }
+    // -----------------------------------------------------------------------------------
+
+    // 2. Guardar en la tabla de perfiles
+    const { error: dbError } = await supabase.from("perfiles").insert([
+      {
+        id: data.user.id,
+        email: formData.email,
+        nombre: formData.nombre,
+        apellido: formData.apellido,
+        rol: rolFinal, // <--- Guardamos el rol correcto
+        entrenador_id: idDelEntrenador, 
+      }
+    ]);
+
+    if (dbError) throw new Error("Error de base de datos: " + dbError.message);
+
+    // 3. Forzamos la actualización local para que entre a la app inmediatamente con el rol correcto
+    setUser({
+      id: data.user.id,
+      email: formData.email,
+      nombre: formData.nombre,
+      apellido: formData.apellido,
+      role: rolFinal as "entrenador" | "cliente"
+    });
   };
 
   const logout = async () => {
-    try {
-      await apiFetch("/api/auth/logout", { method: "POST" });
-    } catch {}
+    await supabase.auth.signOut();
     setUser(null);
-    await AsyncStorage.removeItem("user");
   };
 
   const value = useMemo(

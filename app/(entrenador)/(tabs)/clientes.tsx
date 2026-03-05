@@ -1,47 +1,127 @@
 import React, { useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, RefreshControl, Image, Modal, ActivityIndicator, Alert,
+  Platform, RefreshControl, Image, Modal, ActivityIndicator, KeyboardAvoidingView,
+  Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import * as Haptics from "expo-haptics";
+
+// Importaciones para Supabase directo
+import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/auth";
 
 export default function ClientesScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { user } = useAuth(); // <-- Obtenemos el entrenador actual
   const [showModal, setShowModal] = useState(false);
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
+  // 1. OBTENER CLIENTES E INVITACIONES DIRECTO DE SUPABASE
   const { data, refetch } = useQuery({
-    queryKey: ["/api/clients"],
+    queryKey: ["clients", user?.id],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/clients");
-      return res.json();
+      if (!user?.id) return { clients: [] };
+
+      // Buscar los clientes activos que ya tienen cuenta
+      const { data: clientesActivos, error: errActivos } = await supabase
+        .from("perfiles")
+        .select("*")
+        .eq("rol", "cliente")
+        .eq("entrenador_id", user.id);
+
+      // Buscar las invitaciones pendientes
+      const { data: invitaciones, error: errInvitaciones } = await supabase
+        .from("invitaciones")
+        .select("*")
+        .eq("estado", "pendiente")
+        .eq("entrenador_id", user.id);
+
+      if (errActivos) throw new Error(errActivos.message);
+      if (errInvitaciones) throw new Error(errInvitaciones.message);
+
+      // Formatear activos
+      const perfilesFormateados = (clientesActivos || []).map(c => ({
+        ...c,
+        status: "activo"
+      }));
+
+      // Formatear pendientes para que la interfaz los lea igual
+      const invitacionesFormateadas = (invitaciones || []).map(inv => ({
+        id: inv.id,
+        invite_email: inv.email,
+        status: "pendiente",
+        role: "cliente"
+      }));
+
+      // Unir ambas listas
+      return { clients: [...perfilesFormateados, ...invitacionesFormateadas] };
     },
+    enabled: !!user?.id, // Solo ejecutar si hay un usuario logueado
   });
 
+  // 2. CREAR O VINCULAR CLIENTE
   const addMutation = useMutation({
     mutationFn: async (inviteEmail: string) => {
-      const res = await apiRequest("POST", "/api/clients", { email: inviteEmail });
-      return res.json();
+      if (!user?.id) throw new Error("No autenticado");
+
+      // Paso A: Buscar si el usuario ya existe en perfiles usando el correo
+      const { data: clienteExistente, error: errBusqueda } = await supabase
+        .from("perfiles")
+        .select("*")
+        .eq("email", inviteEmail)
+        .maybeSingle(); // maybeSingle evita que lance error si no encuentra a nadie
+
+      if (clienteExistente) {
+        // Si existe, verificamos que sea un cliente y no otro entrenador
+        if (clienteExistente.rol !== "cliente") {
+          throw new Error("Este correo pertenece a una cuenta de Entrenador.");
+        }
+
+        // Lo vinculamos actualizando su entrenador_id
+        const { error: updateError } = await supabase
+          .from("perfiles")
+          .update({ entrenador_id: user.id })
+          .eq("id", clienteExistente.id);
+
+        if (updateError) throw new Error(updateError.message);
+        return { tipo: "vinculado" };
+        
+      } else {
+        // Paso B: Si no existe, lo agregamos a la tabla de invitaciones como pendiente
+        const { error: inviteError } = await supabase
+          .from("invitaciones")
+          .insert([{ email: inviteEmail, entrenador_id: user.id }]);
+
+        if (inviteError) throw new Error(inviteError.message);
+        return { tipo: "invitado" };
+      }
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/clients"] });
+    onSuccess: (resultado) => {
+      qc.invalidateQueries({ queryKey: ["clients", user?.id] });
       setShowModal(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Mostramos una alerta dependiendo de lo que haya sucedido
+      if (resultado.tipo === "vinculado") {
+        Alert.alert("¡Cliente Vinculado!", "El usuario ya tenía cuenta y ha sido agregado a tu lista exitosamente.");
+      } else {
+        Alert.alert("Invitación Pendiente", "El usuario no tiene cuenta en la app. Se ha guardado en pendientes hasta que se registre.");
+      }
+
       setEmail("");
       setError("");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (err: any) => {
-      setError(err.message || "Error al agregar cliente");
+      setError(err.message || "Error al agregar paciente");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     },
   });
@@ -77,8 +157,8 @@ export default function ClientesScreen() {
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.title}>Clientes</Text>
-            <Text style={styles.subtitle}>{clients.length} clientes registrados</Text>
+            <Text style={styles.title}>Pacientes</Text>
+            <Text style={styles.subtitle}>{clients.length} registrados</Text>
           </View>
           <Pressable
             style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.8 }]}
@@ -93,7 +173,7 @@ export default function ClientesScreen() {
           <Ionicons name="search" size={18} color={Colors.textMuted} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Buscar cliente..."
+            placeholder="Buscar paciente..."
             placeholderTextColor={Colors.textMuted}
             value={search}
             onChangeText={setSearch}
@@ -109,16 +189,16 @@ export default function ClientesScreen() {
           <View style={styles.emptyState}>
             <Ionicons name="people-outline" size={56} color={Colors.textMuted} />
             <Text style={styles.emptyTitle}>
-              {search ? "Sin resultados" : "Sin clientes aún"}
+              {search ? "Sin resultados" : "Sin pacientes aún"}
             </Text>
             <Text style={styles.emptySubtitle}>
               {search
                 ? "Intenta con otro término de búsqueda"
-                : "Agrega tu primer cliente invitándolo por correo"}
+                : "Agrega tu primer paciente invitándolo por correo"}
             </Text>
             {!search && (
               <Pressable style={styles.emptyBtn} onPress={() => setShowModal(true)}>
-                <Text style={styles.emptyBtnText}>Invitar cliente</Text>
+                <Text style={styles.emptyBtnText}>Invitar paciente</Text>
               </Pressable>
             )}
           </View>
@@ -165,7 +245,7 @@ export default function ClientesScreen() {
                       {client.status === "activo" ? "Activo" : "Pendiente"}
                     </Text>
                   </View>
-                  <Text style={styles.roleText}>{client.role || "cliente"}</Text>
+                  <Text style={styles.roleText}>{client.role || "paciente"}</Text>
                 </View>
               </View>
 
@@ -191,61 +271,66 @@ export default function ClientesScreen() {
         animationType="slide"
         onRequestClose={() => setShowModal(false)}
       >
-        <Pressable style={styles.overlay} onPress={() => setShowModal(false)} />
-        <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
-          <View style={styles.modalHandle} />
-          <Text style={styles.modalTitle}>Agregar Cliente</Text>
-          <Text style={styles.modalSubtitle}>
-            Ingresa el correo electrónico de tu cliente. Si ya tiene cuenta, se conectará automáticamente.
-          </Text>
+        <KeyboardAvoidingView 
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <Pressable style={styles.overlay} onPress={() => setShowModal(false)} />
+          <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Agregar Paciente</Text>
+            <Text style={styles.modalSubtitle}>
+              Ingresa el correo electrónico de tu paciente. Si ya tiene cuenta, se conectará automáticamente.
+            </Text>
 
-          {error ? (
-            <View style={styles.errorBox}>
-              <Ionicons name="alert-circle" size={16} color={Colors.error} />
-              <Text style={styles.errorText}>{error}</Text>
+            {error ? (
+              <View style={styles.errorBox}>
+                <Ionicons name="alert-circle" size={16} color={Colors.error} />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.inputContainer}>
+              <Ionicons name="mail-outline" size={20} color={Colors.textMuted} />
+              <TextInput
+                style={styles.modalInput}
+                placeholder="correo@ejemplo.com"
+                placeholderTextColor={Colors.textMuted}
+                value={email}
+                onChangeText={(t) => { setEmail(t); setError(""); }}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoFocus
+              />
             </View>
-          ) : null}
 
-          <View style={styles.inputContainer}>
-            <Ionicons name="mail-outline" size={20} color={Colors.textMuted} />
-            <TextInput
-              style={styles.modalInput}
-              placeholder="correo@ejemplo.com"
-              placeholderTextColor={Colors.textMuted}
-              value={email}
-              onChangeText={(t) => { setEmail(t); setError(""); }}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoFocus
-            />
+            <Pressable
+              style={({ pressed }) => [
+                styles.confirmBtn,
+                addMutation.isPending && styles.btnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => {
+                if (!email.trim()) return setError("El correo es requerido");
+                addMutation.mutate(email.trim());
+              }}
+              disabled={addMutation.isPending}
+            >
+              {addMutation.isPending ? (
+                <ActivityIndicator color={Colors.primaryText} />
+              ) : (
+                <Text style={styles.confirmBtnText}>Agregar</Text>
+              )}
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.7 }]}
+              onPress={() => { setShowModal(false); setError(""); setEmail(""); }}
+            >
+              <Text style={styles.cancelBtnText}>Cancelar</Text>
+            </Pressable>
           </View>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.confirmBtn,
-              addMutation.isPending && styles.btnDisabled,
-              pressed && { opacity: 0.85 },
-            ]}
-            onPress={() => {
-              if (!email.trim()) return setError("El correo es requerido");
-              addMutation.mutate(email.trim());
-            }}
-            disabled={addMutation.isPending}
-          >
-            {addMutation.isPending ? (
-              <ActivityIndicator color={Colors.primaryText} />
-            ) : (
-              <Text style={styles.confirmBtnText}>Agregar</Text>
-            )}
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.7 }]}
-            onPress={() => { setShowModal(false); setError(""); setEmail(""); }}
-          >
-            <Text style={styles.cancelBtnText}>Cancelar</Text>
-          </Pressable>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
