@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View, Text, StyleSheet, FlatList, Pressable,
   Platform, RefreshControl, ActivityIndicator, Modal, ScrollView
@@ -24,6 +24,10 @@ export default function HistorialActividadScreen() {
   const { user } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
   const [selectedSession, setSelectedSession] = useState<any>(null);
+  
+  // Estado para los ejercicios del reporte
+  const [sessionExercises, setSessionExercises] = useState<any[]>([]);
+  const [loadingExercises, setLoadingExercises] = useState(false);
 
   const { data, refetch, isLoading } = useQuery({
     queryKey: ["all_sessions", user?.id],
@@ -71,6 +75,28 @@ export default function HistorialActividadScreen() {
     await refetch();
     setRefreshing(false);
   }, [refetch]);
+
+  // Cargar ejercicios cuando se abre un modal
+  useEffect(() => {
+    async function loadExercises() {
+      if (selectedSession && selectedSession.rutina_id) {
+        setLoadingExercises(true);
+        const { data, error } = await supabase
+          .from("ejercicios")
+          .select("*")
+          .eq("rutina_id", selectedSession.rutina_id)
+          .order("orden", { ascending: true }); 
+
+        if (!error && data) {
+          setSessionExercises(data);
+        }
+        setLoadingExercises(false);
+      } else {
+         setSessionExercises([]);
+      }
+    }
+    loadExercises();
+  }, [selectedSession]);
 
   const sessions = data?.sessions || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
@@ -191,7 +217,7 @@ export default function HistorialActividadScreen() {
                   </View>
                 </View>
 
-                {/* Desglose de Tiempos (Estilo Strava/Apple Fitness) */}
+                {/* Desglose de Tiempos */}
                 <Text style={styles.sectionHeaderTitle}>Desglose de Tiempo</Text>
                 <View style={styles.timeGrid}>
                   <View style={styles.timeCard}>
@@ -234,6 +260,40 @@ export default function HistorialActividadScreen() {
                     Terminó {selectedSession.exercises_completed} de {selectedSession.total_exercises} ejercicios asignados.
                   </Text>
                 </View>
+
+                {/* DESGLOSE DE EJERCICIOS */}
+                <Text style={[styles.sectionHeaderTitle, { marginTop: 10 }]}>Ejercicios Asignados</Text>
+                
+                {loadingExercises ? (
+                   <ActivityIndicator color={Colors.primary} style={{ marginVertical: 20 }}/>
+                ) : sessionExercises.length === 0 ? (
+                  <Text style={styles.emptyListText}>No se encontraron ejercicios en esta rutina.</Text>
+                ) : (
+                   <View style={styles.exercisesList}>
+                      {sessionExercises.map((ex, index) => {
+                         // Asumimos que si completó 3 de 5 ejercicios, fueron los primeros 3 en orden
+                         const isCompleted = index < selectedSession.exercises_completed;
+
+                         return (
+                            <View key={ex.id} style={[styles.exerciseItem, !isCompleted && styles.exerciseItemPending]}>
+                               <Ionicons 
+                                 name={isCompleted ? "checkmark-circle" : "ellipse-outline"} 
+                                 size={24} 
+                                 color={isCompleted ? Colors.success : Colors.textMuted} 
+                               />
+                               <View style={styles.exerciseItemInfo}>
+                                 <Text style={[styles.exerciseItemName, !isCompleted && { color: Colors.textMuted }]}>
+                                   {ex.nombre}
+                                 </Text>
+                                 <Text style={styles.exerciseItemDetails}>
+                                   {ex.series} series x {ex.repeticiones} reps {ex.peso ? `(${ex.peso})` : ''}
+                                 </Text>
+                               </View>
+                            </View>
+                         )
+                      })}
+                   </View>
+                )}
 
                 <Pressable style={styles.closeSessionBtn} onPress={() => setSelectedSession(null)}>
                   <Text style={styles.closeSessionText}>Cerrar reporte</Text>
@@ -535,6 +595,50 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textMuted,
   },
+  
+  // Estilos de la lista de ejercicios:
+  exercisesList: {
+     backgroundColor: Colors.surface,
+     borderRadius: 16,
+     borderWidth: 1,
+     borderColor: Colors.border,
+     paddingHorizontal: 16,
+     paddingVertical: 4,
+     marginBottom: 30,
+  },
+  exerciseItem: {
+     flexDirection: 'row',
+     alignItems: 'center',
+     paddingVertical: 14,
+     borderBottomWidth: 1,
+     borderBottomColor: Colors.border,
+     gap: 12,
+  },
+  exerciseItemPending: {
+     opacity: 0.5,
+  },
+  exerciseItemInfo: {
+     flex: 1,
+  },
+  exerciseItemName: {
+     fontFamily: "Outfit_600SemiBold",
+     fontSize: 15,
+     color: Colors.text,
+  },
+  exerciseItemDetails: {
+     fontFamily: "Outfit_400Regular",
+     fontSize: 13,
+     color: Colors.textMuted,
+     marginTop: 2,
+  },
+  emptyListText: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 14,
+    color: Colors.textMuted,
+    textAlign: "center",
+    marginBottom: 30,
+  },
+
   closeSessionBtn: {
     backgroundColor: Colors.primary,
     paddingVertical: 16,

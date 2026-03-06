@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, TextInput, Pressable, StyleSheet,
-  ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform,
+  ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Linking
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -44,17 +44,28 @@ export default function RegisterScreen() {
     }
   };
 
+  const openLink = async (url: string) => {
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      }
+    } catch (error) {
+      console.log("Error al intentar abrir el enlace", error);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: Colors.background }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
           {
             paddingTop: insets.top + (Platform.OS === "web" ? 67 : 20),
-            paddingBottom: insets.bottom + 34,
+            paddingBottom: insets.bottom + 100, // Margen extra para el teclado
           },
         ]}
         keyboardShouldPersistTaps="handled"
@@ -104,7 +115,7 @@ export default function RegisterScreen() {
                 color={role === "cliente" ? Colors.primaryText : Colors.textSecondary}
               />
               <Text style={[styles.roleText, role === "cliente" && styles.roleTextActive]}>
-                Cliente
+                Paciente
               </Text>
             </Pressable>
           </View>
@@ -191,7 +202,13 @@ export default function RegisterScreen() {
           </Pressable>
 
           <Text style={styles.termsText}>
-            Al registrarte aceptas nuestros términos de servicio y política de privacidad.
+            Al registrarte aceptas nuestros{" "}
+            <Text 
+              style={styles.linkText} 
+              onPress={() => openLink('https://www.notion.so/Pol-ticas-de-Privacidad-y-T-rminos-Diego-APP-31b621fdb42180c18e0ac2b3b797b8d9?source=copy_link')}
+            >
+              términos de servicio y privacidad
+            </Text>.
           </Text>
         </View>
       </ScrollView>
@@ -350,10 +367,15 @@ const styles = StyleSheet.create({
   },
   termsText: {
     fontFamily: "Outfit_400Regular",
-    fontSize: 12,
+    fontSize: 13,
     color: Colors.textMuted,
     textAlign: "center",
     marginTop: 16,
-    lineHeight: 18,
+    lineHeight: 20,
   },
+  linkText: {
+    color: Colors.primary,
+    fontFamily: "Outfit_600SemiBold",
+    textDecorationLine: "underline",
+  }
 });
