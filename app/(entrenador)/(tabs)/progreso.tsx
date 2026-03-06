@@ -1,22 +1,25 @@
 import React, { useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, RefreshControl, Modal, ActivityIndicator, Image,
+  Platform, RefreshControl, Modal, ActivityIndicator, Image, Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/auth";
 import { useUpload } from "@/hooks/useUpload";
 import { UploadProgressBar } from "@/components/MediaViewer";
 
+// Importar Supabase
+import { supabase } from "@/lib/supabase";
+
 export default function ProgresoTrainerScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user } = useAuth();
+  
   const [showModal, setShowModal] = useState(false);
   const [selectedClient, setSelectedClient] = useState("");
   const [fecha, setFecha] = useState(new Date().toISOString().split("T")[0]);
@@ -30,50 +33,75 @@ export default function ProgresoTrainerScreen() {
   const photoUpload = useUpload();
   const [refreshing, setRefreshing] = useState(false);
 
+  // 1. OBTENER LOS CLIENTES DEL ENTRENADOR DESDE SUPABASE
   const { data: clientsData } = useQuery({
-    queryKey: ["/api/clients"],
+    queryKey: ["clients", user?.id],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/clients");
-      return res.json();
+      if (!user?.id) return { clients: [] };
+      const { data, error } = await supabase
+        .from("perfiles")
+        .select("*")
+        .eq("rol", "cliente")
+        .eq("entrenador_id", user.id);
+
+      if (error) throw new Error(error.message);
+      return { clients: data };
     },
+    enabled: !!user?.id,
   });
 
-  const activeClients = (clientsData?.clients || []).filter(
-    (c: any) => c.status === "activo" && c.client_id
-  );
+  const activeClients = clientsData?.clients || [];
+  
+  // Si no ha seleccionado a nadie, mostramos al primer cliente o a él mismo
+  const targetClientId = selectedClient || (activeClients.length > 0 ? activeClients[0].id : user?.id);
 
-  const targetClientId = selectedClient || activeClients[0]?.client_id || user?.id;
-
+  // 2. OBTENER EL PROGRESO DEL CLIENTE SELECCIONADO
   const { data: progressData, refetch } = useQuery({
-    queryKey: ["/api/progress", targetClientId],
+    queryKey: ["progress", targetClientId],
     enabled: !!targetClientId,
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/progress?clientId=${targetClientId}`);
-      return res.json();
+      const { data, error } = await supabase
+        .from("progreso")
+        .select("*")
+        .eq("cliente_id", targetClientId)
+        .order("fecha", { ascending: false });
+
+      if (error) throw new Error(error.message);
+      return { entries: data || [] };
     },
   });
 
+  // 3. GUARDAR UN NUEVO REGISTRO
   const createMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/progress", {
-        clientId: targetClientId,
-        fecha,
-        peso: peso ? Number(peso) : undefined,
-        grasaCorporal: grasa ? Number(grasa) : undefined,
-        masaMuscular: musculo ? Number(musculo) : undefined,
-        cintura: cintura ? Number(cintura) : undefined,
-        notas: notas || undefined,
-        fotoUrl: fotoUrl || undefined,
-      });
-      return res.json();
+      if (!user?.id || !targetClientId) throw new Error("Faltan datos de usuario");
+
+      const { error } = await supabase
+        .from("progreso")
+        .insert([{
+          cliente_id: targetClientId,
+          entrenador_id: user.id,
+          fecha,
+          peso: peso ? Number(peso) : null,
+          grasa_corporal: grasa ? Number(grasa) : null,
+          masa_muscular: musculo ? Number(musculo) : null,
+          cintura: cintura ? Number(cintura) : null,
+          notas: notas || null,
+          foto_url: fotoUrl || null,
+        }]);
+
+      if (error) throw new Error(error.message);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/progress"] });
+      qc.invalidateQueries({ queryKey: ["progress", targetClientId] });
       setShowModal(false);
       resetForm();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
-    onError: (err: any) => setError(err.message || "Error al guardar"),
+    onError: (err: any) => {
+      setError(err.message || "Error al guardar");
+      Alert.alert("Error", err.message);
+    },
   });
 
   const resetForm = () => {
@@ -87,14 +115,13 @@ export default function ProgresoTrainerScreen() {
     setRefreshing(true);
     await refetch();
     setRefreshing(false);
-  }, [targetClientId]);
+  }, [targetClientId, refetch]);
 
   const pickPhoto = async () => {
     photoUpload.reset();
     const result = await photoUpload.pickAndUpload("images");
     if (result) {
       setFotoUrl(result.url);
-      console.log("[progreso-trainer] Foto subida:", result.url);
     }
   };
 
@@ -129,20 +156,20 @@ export default function ProgresoTrainerScreen() {
         {activeClients.length > 0 && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
             <Pressable
-              style={[styles.clientTab, !selectedClient && styles.clientTabActive]}
-              onPress={() => setSelectedClient("")}
+              style={[styles.clientTab, selectedClient === user?.id && styles.clientTabActive]}
+              onPress={() => setSelectedClient(user?.id || "")}
             >
-              <Text style={[styles.clientTabText, !selectedClient && styles.clientTabTextActive]}>
+              <Text style={[styles.clientTabText, selectedClient === user?.id && styles.clientTabTextActive]}>
                 Yo
               </Text>
             </Pressable>
             {activeClients.map((c: any) => (
               <Pressable
                 key={c.id}
-                style={[styles.clientTab, selectedClient === c.client_id && styles.clientTabActive]}
-                onPress={() => setSelectedClient(c.client_id)}
+                style={[styles.clientTab, targetClientId === c.id && styles.clientTabActive]}
+                onPress={() => setSelectedClient(c.id)}
               >
-                <Text style={[styles.clientTabText, selectedClient === c.client_id && styles.clientTabTextActive]}>
+                <Text style={[styles.clientTabText, targetClientId === c.id && styles.clientTabTextActive]}>
                   {c.nombre} {c.apellido}
                 </Text>
               </Pressable>

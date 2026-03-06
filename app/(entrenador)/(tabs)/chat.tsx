@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View, Text, StyleSheet, FlatList, Pressable,
   Platform, RefreshControl, Image, ActivityIndicator,
@@ -9,8 +9,18 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/auth";
+import { supabase } from "@/lib/supabase";
+import * as Notifications from "expo-notifications"; 
+
+// Configuración para que las notificaciones suenen y se muestren como alerta
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
 
 function timeAgo(dateStr: string): string {
   const d = new Date(dateStr);
@@ -30,40 +40,118 @@ export default function ChatListScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const { data, refetch, isLoading } = useQuery({
-    queryKey: ["/api/chat/conversations"],
+    queryKey: ["chats_list_trainer", user?.id],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/chat/conversations");
-      return res.json();
+      if (!user?.id) return { conversations: [] };
+
+      // 1. Obtener los clientes vinculados a este entrenador
+      const { data: clientsData, error: clientsError } = await supabase
+        .from("perfiles")
+        .select("*")
+        .eq("rol", "cliente")
+        .eq("entrenador_id", user.id);
+
+      if (clientsError) throw new Error(clientsError.message);
+      
+      const clients = clientsData || [];
+
+      // 2. Obtener TODOS los mensajes donde participe el entrenador
+      const { data: messagesData, error: msgError } = await supabase
+        .from("mensajes")
+        .select("*")
+        .or(`emisor_id.eq.${user.id},receptor_id.eq.${user.id}`)
+        .order("created_at", { ascending: false });
+
+      if (msgError) throw new Error(msgError.message);
+
+      const messages = messagesData || [];
+
+      // 3. Crear la lista final de conversaciones basándonos en los CLIENTES
+      const finalConversations = clients.map(client => {
+        // Buscar si hay mensajes con este cliente específico
+        const clientMessages = messages.filter(
+          m => (m.emisor_id === client.id && m.receptor_id === user.id) || 
+               (m.emisor_id === user.id && m.receptor_id === client.id)
+        );
+
+        let lastMsg = null;
+        let unreadCount = 0;
+
+        if (clientMessages.length > 0) {
+          lastMsg = clientMessages[0]; // El más reciente (ya vienen ordenados)
+          unreadCount = clientMessages.filter(m => m.receptor_id === user.id && !m.leido).length;
+        }
+
+        return {
+          other_id: client.id,
+          nombre: client.nombre,
+          apellido: client.apellido,
+          avatar_url: client.avatar_url,
+          last_msg: lastMsg?.texto,
+          last_tipo: lastMsg?.tipo,
+          last_at: lastMsg?.created_at,
+          unread_count: unreadCount,
+        };
+      });
+
+      // Ordenar: primero los que tienen mensajes (más recientes arriba), luego los que no
+      finalConversations.sort((a, b) => {
+        if (!a.last_at && !b.last_at) return 0;
+        if (!a.last_at) return 1;
+        if (!b.last_at) return -1;
+        return new Date(b.last_at).getTime() - new Date(a.last_at).getTime();
+      });
+
+      return { conversations: finalConversations };
     },
-    refetchInterval: 5000,
+    enabled: !!user?.id,
   });
 
-  const { data: clientsData } = useQuery({
-    queryKey: ["/api/clients"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/clients");
-      return res.json();
-    },
-  });
+  // --- ESCUCHAR MENSAJES EN TIEMPO REAL ---
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('nuevos-mensajes-entrenador')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'mensajes', filter: `receptor_id=eq.${user.id}` },
+        (payload) => {
+          const nuevoMensaje = payload.new;
+          
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: "¡Nuevo mensaje!",
+              body: nuevoMensaje.texto || (nuevoMensaje.tipo === 'imagen' ? '📷 Imagen' : '🎥 Video'),
+              sound: true,
+            },
+            trigger: null,
+          });
+
+          refetch();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, refetch]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refetch();
     setRefreshing(false);
-  }, []);
+  }, [refetch]);
 
   const conversations = data?.conversations || [];
-  const activeClients = (clientsData?.clients || []).filter(
-    (c: any) => c.status === "activo" && c.client_id
-  );
-
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.background }}>
       <View style={[styles.header, { paddingTop: topInset + 16 }]}>
         <Text style={styles.title}>Mensajes</Text>
-        <Text style={styles.subtitle}>{conversations.length} conversaciones</Text>
+        <Text style={styles.subtitle}>{conversations.length} pacientes</Text>
       </View>
 
       {isLoading ? (
@@ -80,44 +168,14 @@ export default function ChatListScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />
           }
-          ListHeaderComponent={
-            activeClients.length > 0 && conversations.length === 0 ? (
-              <View style={styles.suggestedSection}>
-                <Text style={styles.suggestedTitle}>Clientes</Text>
-                {activeClients.map((c: any) => (
-                  <Pressable
-                    key={c.id}
-                    style={({ pressed }) => [styles.conversationItem, pressed && { opacity: 0.8 }]}
-                    onPress={() => router.push({
-                      pathname: "/(entrenador)/chat/[id]",
-                      params: { id: c.client_id, nombre: `${c.nombre} ${c.apellido}` }
-                    })}
-                  >
-                    <LinearGradient colors={["#374151", "#1F2937"]} style={styles.avatar}>
-                      <Text style={styles.avatarText}>
-                        {(c.nombre || "?")[0].toUpperCase()}
-                      </Text>
-                    </LinearGradient>
-                    <View style={styles.convInfo}>
-                      <Text style={styles.convName}>{c.nombre} {c.apellido}</Text>
-                      <Text style={styles.convPreview}>Toca para iniciar conversación</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null
-          }
           ListEmptyComponent={
-            activeClients.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Ionicons name="chatbubbles-outline" size={56} color={Colors.textMuted} />
-                <Text style={styles.emptyTitle}>Sin mensajes</Text>
-                <Text style={styles.emptySubtitle}>
-                  Agrega clientes para poder chatear con ellos
-                </Text>
-              </View>
-            ) : null
+            <View style={styles.emptyState}>
+              <Ionicons name="chatbubbles-outline" size={56} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>Sin mensajes</Text>
+              <Text style={styles.emptySubtitle}>
+                Agrega pacientes para poder chatear con ellos
+              </Text>
+            </View>
           }
           renderItem={({ item }) => (
             <Pressable
@@ -146,8 +204,15 @@ export default function ChatListScreen() {
                   </Text>
                 </View>
                 <View style={styles.convBottom}>
-                  <Text style={styles.convPreview} numberOfLines={1}>
-                    {item.last_tipo === "imagen" ? "Imagen" : item.last_tipo === "video" ? "Video" : item.last_msg || ""}
+                  <Text style={[
+                    styles.convPreview, 
+                    Number(item.unread_count) > 0 && { color: Colors.text, fontFamily: "Outfit_600SemiBold" }
+                  ]} numberOfLines={1}>
+                    {item.last_tipo === "imagen" 
+                      ? "📷 Imagen" 
+                      : item.last_tipo === "video" 
+                        ? "🎥 Video" 
+                        : item.last_msg || "Toca para iniciar conversación"}
                   </Text>
                   {Number(item.unread_count) > 0 && (
                     <View style={styles.unreadBadge}>
@@ -159,26 +224,6 @@ export default function ChatListScreen() {
             </Pressable>
           )}
         />
-      )}
-
-      {/* FAB to start new chat */}
-      {activeClients.length > 0 && conversations.length > 0 && (
-        <View style={[styles.fab, { bottom: insets.bottom + 100 }]}>
-          {activeClients.map((c: any) => (
-            <Pressable
-              key={c.id}
-              style={({ pressed }) => [styles.fabItem, pressed && { opacity: 0.8 }]}
-              onPress={() => router.push({
-                pathname: "/(entrenador)/chat/[id]",
-                params: { id: c.client_id, nombre: `${c.nombre} ${c.apellido}` }
-              })}
-            >
-              <LinearGradient colors={["#374151", "#1F2937"]} style={styles.fabAvatar}>
-                <Text style={styles.fabAvatarText}>{(c.nombre || "?")[0].toUpperCase()}</Text>
-              </LinearGradient>
-            </Pressable>
-          ))}
-        </View>
       )}
     </View>
   );
@@ -209,17 +254,6 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: 20,
     paddingBottom: 120,
-  },
-  suggestedSection: {
-    marginBottom: 16,
-  },
-  suggestedTitle: {
-    fontFamily: "Outfit_600SemiBold",
-    fontSize: 14,
-    color: Colors.textSecondary,
-    marginBottom: 12,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
   },
   emptyState: {
     alignItems: "center",
@@ -308,26 +342,5 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
     fontSize: 11,
     color: Colors.primaryText,
-  },
-  fab: {
-    position: "absolute",
-    right: 20,
-    flexDirection: "column",
-    gap: 8,
-  },
-  fabItem: {},
-  fabAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: Colors.primary,
-  },
-  fabAvatarText: {
-    fontFamily: "Outfit_700Bold",
-    fontSize: 14,
-    color: Colors.text,
   },
 });

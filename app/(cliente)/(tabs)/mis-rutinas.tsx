@@ -7,34 +7,57 @@ import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
+import { useAuth } from "@/context/auth";
+
+// Importar Supabase
+import { supabase } from "@/lib/supabase";
 
 export default function MisRutinasScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
 
   const { data, refetch, isLoading } = useQuery({
-    queryKey: ["/api/routines"],
+    queryKey: ["client_routines_list", user?.id],
+    enabled: !!user?.id,
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/routines");
-      return res.json();
+      // Buscamos las rutinas asignadas a este cliente específico
+      const { data: routinesData, error } = await supabase
+        .from("rutinas")
+        .select(`
+          *,
+          perfiles:entrenador_id (nombre, apellido)
+        `)
+        .eq("cliente_id", user?.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      // Formateamos para que la interfaz muestre el nombre del entrenador
+      const formatted = (routinesData || []).map((r: any) => ({
+        ...r,
+        trainer_nombre: r.perfiles?.nombre,
+        trainer_apellido: r.perfiles?.apellido,
+      }));
+
+      return { routines: formatted };
     },
     staleTime: 1000 * 60,
-    gcTime: 1000 * 60 * 30,
   });
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refetch();
     setRefreshing(false);
-  }, []);
+  }, [refetch]);
 
   const routines = data?.routines || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
 
   const nivelColor = (n: string) => {
-    if (n === "principiante") return Colors.success;
-    if (n === "avanzado") return Colors.accent;
+    const nivel = n?.toLowerCase();
+    if (nivel === "principiante") return Colors.success;
+    if (nivel === "avanzado") return Colors.accent;
     return Colors.accentBlue;
   };
 
@@ -96,7 +119,7 @@ export default function MisRutinasScreen() {
                 <View style={styles.trainerRow}>
                   <Ionicons name="person" size={14} color={Colors.textMuted} />
                   <Text style={styles.trainerText}>
-                    {item.trainer_nombre} {item.trainer_apellido}
+                    Coach: {item.trainer_nombre} {item.trainer_apellido}
                   </Text>
                 </View>
               )}

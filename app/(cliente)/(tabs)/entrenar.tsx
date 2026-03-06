@@ -9,9 +9,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { InlineVideo } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/auth";
 import { sendLocalNotification } from "@/hooks/useNotifications";
+
+// Importar Supabase
+import { supabase } from "@/lib/supabase";
 
 interface Exercise {
   id: string;
@@ -32,6 +34,7 @@ interface Routine {
   nivel: string;
   trainer_nombre: string | null;
   trainer_apellido: string | null;
+  trainer_id?: string;
 }
 
 type WorkoutPhase = "select" | "working" | "resting" | "complete";
@@ -96,45 +99,87 @@ export default function EntrenarScreen() {
   useEffect(() => { setsCompletedRef.current = setsCompleted; }, [setsCompleted]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
+  // 1. CARGAR RUTINAS DESDE SUPABASE
   const { data: routinesData } = useQuery({
-    queryKey: ["/api/routines"],
+    queryKey: ["client_routines_list", user?.id],
+    enabled: !!user?.id,
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/routines");
-      return res.json();
+      const { data, error } = await supabase
+        .from("rutinas")
+        .select(`
+          *,
+          perfiles:entrenador_id (nombre, apellido)
+        `)
+        .eq("cliente_id", user?.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      const formatted = (data || []).map((r: any) => ({
+        ...r,
+        trainer_nombre: r.perfiles?.nombre,
+        trainer_apellido: r.perfiles?.apellido,
+        trainer_id: r.entrenador_id,
+      }));
+
+      return { routines: formatted };
     },
     staleTime: 1000 * 60,
   });
 
+  // 2. INICIAR SESIÓN DE ENTRENAMIENTO
   const startSessionMutation = useMutation({
-    mutationFn: async (data: { routineId: string; routineNombre: string; totalExercises: number }) => {
-      const res = await apiRequest("POST", "/api/training-sessions", data);
-      return res.json();
+    mutationFn: async (data: { routineId: string; totalExercises: number }) => {
+      const { data: sessionData, error } = await supabase
+        .from("sesiones_entrenamiento")
+        .insert([{
+          cliente_id: user?.id,
+          rutina_id: data.routineId,
+          total_ejercicios: data.totalExercises,
+          ejercicios_completados: 0,
+          duracion_segundos: 0,
+        }])
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+      return sessionData;
     },
     onError: (err) => console.warn("[entrenar] startSession error:", err),
   });
 
+  // 3. FINALIZAR SESIÓN DE ENTRENAMIENTO
   const finishSessionMutation = useMutation({
     mutationFn: async (data: { id: string; durationSeconds: number; exercisesCompleted: number }) => {
-      const res = await apiRequest("PATCH", `/api/training-sessions/${data.id}`, {
-        durationSeconds: data.durationSeconds,
-        exercisesCompleted: data.exercisesCompleted,
-      });
-      return res.json();
+      const { error } = await supabase
+        .from("sesiones_entrenamiento")
+        .update({
+          duracion_segundos: data.durationSeconds,
+          ejercicios_completados: data.exercisesCompleted,
+        })
+        .eq("id", data.id);
+
+      if (error) throw new Error(error.message);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/training-sessions"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
     onError: (err) => console.warn("[entrenar] finishSession error:", err),
   });
 
+  // 4. ENVIAR RESUMEN AL ENTRENADOR VÍA CHAT
   const sendSummaryMutation = useMutation({
     mutationFn: async (data: { receiverId: string; contenido: string }) => {
-      const res = await apiRequest("POST", "/api/chat", {
-        receiverId: data.receiverId,
-        contenido: data.contenido,
-        tipo: "texto",
-      });
-      return res.json();
+      const { error } = await supabase
+        .from("mensajes")
+        .insert([{
+          emisor_id: user?.id,
+          receptor_id: data.receiverId,
+          texto: data.contenido,
+          tipo: "texto",
+        }]);
+
+      if (error) throw new Error(error.message);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/chat/conversations"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["client_chats_preview"] }),
     onError: (err) => console.warn("[entrenar] sendSummary error:", err),
   });
 
@@ -213,9 +258,16 @@ export default function EntrenarScreen() {
 
   const loadRoutineDetail = async (routine: Routine) => {
     try {
-      const res = await apiRequest("GET", `/api/routines/${routine.id}`);
-      const data = await res.json();
-      const exList: Exercise[] = data.exercises || [];
+      // Obtenemos los ejercicios de la rutina seleccionada
+      const { data, error } = await supabase
+        .from("ejercicios")
+        .select("*")
+        .eq("rutina_id", routine.id)
+        .order("orden", { ascending: true });
+
+      if (error) throw new Error(error.message);
+
+      const exList: Exercise[] = data || [];
 
       setExercises(exList);
       setSelectedRoutine(routine);
@@ -234,10 +286,9 @@ export default function EntrenarScreen() {
 
       const session = await startSessionMutation.mutateAsync({
         routineId: routine.id,
-        routineNombre: routine.nombre,
         totalExercises: exList.length,
       });
-      setSessionId(session.session?.id || null);
+      setSessionId(session.id || null);
     } catch {
       Alert.alert("Error", "No se pudo cargar la rutina");
     }
@@ -253,6 +304,7 @@ export default function EntrenarScreen() {
     const exList = exercisesRef.current;
     const selRoutine = selectedRoutineRef.current;
 
+    // 1. Guardamos la sesión en Supabase
     if (sid) {
       finishSessionMutation.mutate({
         id: sid,
@@ -264,15 +316,44 @@ export default function EntrenarScreen() {
     const routines = routinesData?.routines || [];
     const routine = routines.find((r: any) => r.id === selRoutine?.id);
     const trainerId = routine?.trainer_id;
+
+    // 2. Construimos y enviamos el reporte detallado al entrenador
     if (trainerId) {
       const mins = Math.floor(currentTotal / 60);
       const totalSetsInRoutine = exList.reduce((sum, ex) => sum + (ex.series || 1), 0);
+      
+      // Construimos el encabezado del reporte
+      let reporte = `✅ ¡Entrenamiento Completado!\n`;
+      reporte += `📋 Rutina: ${selRoutine?.nombre}\n`;
+      reporte += `⏱️ Tiempo: ${mins} min\n`;
+      reporte += `📊 Progreso: ${completed}/${exList.length} ejercicios (${setsCompl}/${totalSetsInRoutine} series)\n\n`;
+      reporte += `*Desglose de ejercicios:*\n`;
+
+      // Recorremos solo los ejercicios que completó el cliente
+      for (let i = 0; i < completed; i++) {
+        const ex = exList[i];
+        if (ex) {
+          reporte += `- ${ex.nombre}: ${ex.series} series x ${ex.repeticiones} reps`;
+          if (ex.peso) {
+             reporte += ` (${ex.peso})`;
+          }
+          reporte += `\n`;
+        }
+      }
+
+      // Si no terminó todos los ejercicios, agregamos una nota
+      if (completed < exList.length) {
+         reporte += `\n⚠️ Nota: El entrenamiento se terminó antes de completar todos los ejercicios.`;
+      }
+
+      // Enviamos el mensaje a Supabase
       sendSummaryMutation.mutate({
         receiverId: trainerId,
-        contenido: `✅ ¡Entrenamiento completado!\n📋 Rutina: ${selRoutine?.nombre}\n⏱️ Duración: ${mins} min\n💪 Ejercicios: ${completed}/${exList.length}\n🔁 Series: ${setsCompl}/${totalSetsInRoutine}`,
+        contenido: reporte,
       });
     }
 
+    // 3. Notificación local para el cliente
     sendLocalNotification(
       "¡Entrenamiento completado!",
       `Completaste ${completed} ejercicio${completed !== 1 ? "s" : ""} en ${Math.floor(currentTotal / 60)} minutos.`

@@ -47,7 +47,8 @@ export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
 
   const webUnsupported = isWebUnsupportedFormat(uri);
 
-  const player = useVideoPlayer({ uri: webUnsupported ? "" : uri }, (p) => {
+  // OPTIMIZACIÓN AQUÍ: Le dijimos que no empiece a sonar solo, y que precargue lo justo.
+  const player = useVideoPlayer(webUnsupported ? "" : uri, (p) => {
     p.loop = false;
     p.muted = false;
   });
@@ -71,7 +72,10 @@ export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
     });
     const statusSub = player.addListener("statusChange", ({ status }) => {
       if (status === "readyToPlay") setIsReady(true);
-      if (status === "error") setHasError(true);
+      if (status === "error") {
+        console.warn("Error cargando video:", uri);
+        setHasError(true);
+      }
     });
 
     return () => {
@@ -80,7 +84,7 @@ export function InlineVideo({ uri, style, compact = false }: InlineVideoProps) {
       endSub.remove();
       statusSub.remove();
     };
-  }, [player]);
+  }, [player, webUnsupported, uri]);
 
   const togglePlay = useCallback(() => {
     if (isPlaying) {

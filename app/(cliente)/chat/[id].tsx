@@ -1,24 +1,24 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, FlatList, Pressable, TextInput,
-  Platform, ActivityIndicator, KeyboardAvoidingView,
+  Platform, ActivityIndicator, KeyboardAvoidingView, Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/auth";
 import { useUpload } from "@/hooks/useUpload";
 import { ChatMedia, UploadProgressBar } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
+import { supabase } from "@/lib/supabase";
 
 interface Message {
   id: string;
-  sender_id: string;
-  receiver_id: string;
-  contenido: string | null;
+  emisor_id: string;
+  receptor_id: string;
+  texto: string | null;
   tipo: string;
   media_url: string | null;
   leido: boolean;
@@ -33,74 +33,159 @@ function MessageBubble({ message, isMe }: { message: Message; isMe: boolean }) {
   const isImage = message.tipo === "imagen";
   const isVideo = message.tipo === "video";
   const isGif = message.tipo === "gif";
-  const hasMedia = (isImage || isVideo || isGif) && message.media_url;
+  const hasMedia = (isImage || isVideo || isGif) && !!message.media_url;
 
   return (
     <View style={[styles.bubbleRow, isMe ? styles.bubbleRowMe : styles.bubbleRowOther]}>
       <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther, hasMedia && styles.bubbleMedia]}>
+        
+        {/* Renderizar Imagen/Video */}
         {hasMedia ? (
           <ChatMedia uri={message.media_url!} tipo={message.tipo} isMe={isMe} />
         ) : null}
-        {message.contenido ? (
+        
+        {/* Renderizar Texto */}
+        {message.texto ? (
           <Text style={[styles.bubbleText, isMe ? styles.bubbleTextMe : styles.bubbleTextOther]}>
-            {message.contenido}
+            {message.texto}
           </Text>
         ) : null}
+        
         <Text style={[styles.bubbleTime, isMe ? styles.bubbleTimeMe : styles.bubbleTimeOther]}>
           {formatTime(message.created_at)}
+          {isMe && (
+            <Ionicons
+              name={message.leido ? "checkmark-done" : "checkmark"}
+              size={12}
+              color={isMe ? "rgba(0,0,0,0.4)" : Colors.textMuted}
+            />
+          )}
         </Text>
       </View>
     </View>
   );
 }
 
-export default function ClienteChatDetailScreen() {
+export default function ChatDetailScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { id, nombre } = useLocalSearchParams<{ id: string; nombre: string }>();
+  const { id: otherId, nombre } = useLocalSearchParams<{ id: string; nombre: string }>();
   const qc = useQueryClient();
+  
   const [text, setText] = useState("");
   const { uploading, progress, error: uploadError, pickAndUpload, reset: resetUpload } = useUpload();
 
+  // 1. OBTENER MENSAJES INICIALES
   const { data } = useQuery({
-    queryKey: ["/api/chat", id],
-    enabled: !!id,
+    queryKey: ["chat_messages", user?.id, otherId],
+    enabled: !!user?.id && !!otherId,
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/chat/${id}`);
-      return res.json();
+      // Marcar los mensajes entrantes como leídos
+      await supabase
+        .from("mensajes")
+        .update({ leido: true })
+        .eq("emisor_id", otherId)
+        .eq("receptor_id", user?.id)
+        .eq("leido", false);
+
+      const { data, error } = await supabase
+        .from("mensajes")
+        .select("*")
+        .or(`and(emisor_id.eq.${user?.id},receptor_id.eq.${otherId}),and(emisor_id.eq.${otherId},receptor_id.eq.${user?.id})`)
+        .order("created_at", { ascending: false });
+
+      if (error) throw new Error(error.message);
+      return data as Message[];
     },
-    refetchInterval: 3000,
-    staleTime: 0,
-    gcTime: 1000 * 60 * 10,
   });
 
+  // 2. ENVIAR UN MENSAJE 
   const sendMutation = useMutation({
-    mutationFn: async (payload: { contenido?: string; tipo?: string; mediaUrl?: string }) => {
-      const res = await apiRequest("POST", "/api/chat", { receiverId: id, ...payload });
-      return res.json();
+    mutationFn: async (payload: { texto?: string; tipo?: string; media_url?: string }) => {
+      if (!user?.id || !otherId) throw new Error("Faltan datos de usuario");
+
+      const { data: insertedData, error } = await supabase
+        .from("mensajes")
+        .insert([{
+          emisor_id: user.id,
+          receptor_id: otherId,
+          texto: payload.texto || null,
+          tipo: payload.tipo || "texto",
+          media_url: payload.media_url || null,
+        }])
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+      if (!insertedData) throw new Error("Error al enviar el mensaje.");
+      
+      return insertedData;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/chat", id] });
-      qc.invalidateQueries({ queryKey: ["/api/chat/conversations"] });
+      qc.invalidateQueries({ queryKey: ["chat_messages", user?.id, otherId] });
+      qc.invalidateQueries({ queryKey: ["chats_list_trainer", user?.id] });
+      qc.invalidateQueries({ queryKey: ["client_chats_preview", user?.id] });
+      qc.invalidateQueries({ queryKey: ["client_chats_list", user?.id] });
       setText("");
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     },
+    onError: (err: any) => {
+      Alert.alert("Error al enviar", err.message || "Ocurrió un problema");
+    }
   });
 
-  const messages: Message[] = data?.messages || [];
+  // 3. ESCUCHAR MENSAJES EN TIEMPO REAL
+  useEffect(() => {
+    if (!user?.id || !otherId) return;
+
+    const channel = supabase
+      .channel('chat_room_detail')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'mensajes' },
+        (payload) => {
+          const msg = payload.new as Message;
+          if (
+            (msg.emisor_id === user.id && msg.receptor_id === otherId) || 
+            (msg.emisor_id === otherId && msg.receptor_id === user.id)
+          ) {
+            qc.invalidateQueries({ queryKey: ["chat_messages", user?.id, otherId] });
+            if (msg.emisor_id === otherId) {
+              supabase.from("mensajes").update({ leido: true }).eq("id", msg.id).then();
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'mensajes' },
+        () => {
+           qc.invalidateQueries({ queryKey: ["chat_messages", user?.id, otherId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, otherId]);
+
+  const messages = data || [];
 
   const handleSend = () => {
     const t = text.trim();
     if (!t) return;
-    sendMutation.mutate({ contenido: t, tipo: "texto" });
+    sendMutation.mutate({ texto: t, tipo: "texto" });
   };
 
   const handlePickMedia = async () => {
-    const result = await pickAndUpload("all");
+    const result = await pickAndUpload("images");
     if (!result) return;
+    
+    // Aquí es donde mandamos el mensaje que es una imagen
     sendMutation.mutate({
-      tipo: result.isVideo ? "video" : "imagen",
-      mediaUrl: result.url,
+      tipo: "imagen",
+      media_url: result.url, // Esta URL es la de la imagen en Storage
     });
     resetUpload();
   };
@@ -113,7 +198,6 @@ export default function ClienteChatDetailScreen() {
       style={{ flex: 1, backgroundColor: Colors.background }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      {/* Header */}
       <View style={[styles.header, { paddingTop: topInset + 8 }]}>
         <Pressable
           style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
@@ -127,30 +211,27 @@ export default function ClienteChatDetailScreen() {
           </View>
           <View>
             <Text style={styles.headerName} numberOfLines={1}>{nombre}</Text>
-            <Text style={styles.headerSub}>Entrenador</Text>
           </View>
         </View>
       </View>
 
-      {/* Messages */}
       <FlatList
-        data={[...messages].reverse()}
+        data={messages}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesList}
         showsVerticalScrollIndicator={false}
         inverted
         renderItem={({ item }) => (
-          <MessageBubble message={item} isMe={item.sender_id === user?.id} />
+          <MessageBubble message={item} isMe={item.emisor_id === user?.id} />
         )}
         ListEmptyComponent={
           <View style={styles.emptyChat}>
             <Ionicons name="chatbubble-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyChatText}>Envía un mensaje a tu entrenador</Text>
+            <Text style={styles.emptyChatText}>Inicia la conversación</Text>
           </View>
         }
       />
 
-      {/* Upload progress / error */}
       {(uploading || !!uploadError) && (
         <View style={styles.uploadBar}>
           {uploading && <ActivityIndicator color={Colors.primary} size="small" />}
@@ -162,13 +243,12 @@ export default function ClienteChatDetailScreen() {
               onRetry={uploadError ? () => { resetUpload(); handlePickMedia(); } : undefined}
             />
             {uploading && (
-              <Text style={styles.uploadText}>Subiendo... {progress}%</Text>
+              <Text style={styles.uploadText}>Subiendo archivo... {progress}%</Text>
             )}
           </View>
         </View>
       )}
 
-      {/* Input */}
       <View style={[styles.inputBar, { paddingBottom: bottomPad }]}>
         <Pressable
           style={({ pressed }) => [styles.mediaBtn, pressed && { opacity: 0.7 }]}

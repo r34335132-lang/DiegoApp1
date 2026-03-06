@@ -8,14 +8,18 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import * as Haptics from "expo-haptics";
+
+// Importaciones de Supabase
+import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/auth";
 
 const NIVELES = ["principiante", "intermedio", "avanzado"];
 
 export default function RutinasScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { user } = useAuth(); // <-- Obtenemos el entrenador
   const [showModal, setShowModal] = useState(false);
   const [nombre, setNombre] = useState("");
   const [descripcion, setDescripcion] = useState("");
@@ -25,34 +29,75 @@ export default function RutinasScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
+  // 1. OBTENER RUTINAS DE SUPABASE
   const { data: routinesData, refetch } = useQuery({
-    queryKey: ["/api/routines"],
+    queryKey: ["routines", user?.id],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/routines");
-      return res.json();
+      if (!user?.id) return { routines: [] };
+
+      const { data, error } = await supabase
+        .from("rutinas")
+        .select(`
+          *,
+          perfiles:cliente_id (nombre, apellido)
+        `)
+        .eq("entrenador_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      const formatted = (data || []).map((r: any) => ({
+        ...r,
+        client_nombre: r.perfiles?.nombre,
+        client_apellido: r.perfiles?.apellido,
+      }));
+
+      return { routines: formatted };
     },
+    enabled: !!user?.id,
   });
 
+  // 2. OBTENER CLIENTES (Para el selector del Modal)
   const { data: clientsData } = useQuery({
-    queryKey: ["/api/clients"],
+    queryKey: ["clients", user?.id],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/clients");
-      return res.json();
+      if (!user?.id) return { clients: [] };
+
+      const { data, error } = await supabase
+        .from("perfiles")
+        .select("*")
+        .eq("rol", "cliente")
+        .eq("entrenador_id", user.id);
+
+      if (error) throw new Error(error.message);
+      
+      return { clients: data.map(c => ({ ...c, status: "activo" })) };
     },
+    enabled: !!user?.id,
   });
 
+  // 3. CREAR RUTINA
   const createMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/routines", {
-        nombre: nombre.trim(),
-        descripcion: descripcion.trim() || undefined,
-        nivel,
-        clientId: clientId || undefined,
-      });
-      return res.json();
+      if (!user?.id) throw new Error("No autenticado");
+
+      const { data, error } = await supabase
+        .from("rutinas")
+        .insert([{
+          nombre: nombre.trim(),
+          descripcion: descripcion.trim() || null,
+          nivel,
+          cliente_id: clientId || null,
+          entrenador_id: user.id
+        }])
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+      return data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/routines"] });
+      qc.invalidateQueries({ queryKey: ["routines", user?.id] });
       setShowModal(false);
       resetForm();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -62,13 +107,18 @@ export default function RutinasScreen() {
     },
   });
 
+  // 4. ELIMINAR RUTINA
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("DELETE", `/api/routines/${id}`);
-      return res.json();
+      const { error } = await supabase
+        .from("rutinas")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw new Error(error.message);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/routines"] });
+      qc.invalidateQueries({ queryKey: ["routines", user?.id] });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
   });
@@ -91,7 +141,7 @@ export default function RutinasScreen() {
     !search || r.nombre.toLowerCase().includes(search.toLowerCase())
   );
 
-  const activeClients = (clientsData?.clients || []).filter((c: any) => c.status === "activo" && c.client_id);
+  const activeClients = clientsData?.clients || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
 
   const nivelColor = (n: string) => {
@@ -256,7 +306,7 @@ export default function RutinasScreen() {
 
           {activeClients.length > 0 && (
             <>
-              <Text style={styles.label}>Asignar a cliente (opcional)</Text>
+              <Text style={styles.label}>Asignar a paciente (opcional)</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.clientsScroll}>
                 <Pressable
                   style={[styles.clientOption, !clientId && styles.clientOptionActive]}
@@ -269,10 +319,10 @@ export default function RutinasScreen() {
                 {activeClients.map((c: any) => (
                   <Pressable
                     key={c.id}
-                    style={[styles.clientOption, clientId === c.client_id && styles.clientOptionActive]}
-                    onPress={() => setClientId(c.client_id)}
+                    style={[styles.clientOption, clientId === c.id && styles.clientOptionActive]}
+                    onPress={() => setClientId(c.id)}
                   >
-                    <Text style={[styles.clientOptionText, clientId === c.client_id && styles.clientOptionTextActive]}>
+                    <Text style={[styles.clientOptionText, clientId === c.id && styles.clientOptionTextActive]}>
                       {c.nombre} {c.apellido}
                     </Text>
                   </Pressable>

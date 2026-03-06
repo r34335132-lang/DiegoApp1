@@ -1,22 +1,25 @@
 import React, { useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, RefreshControl, Modal, ActivityIndicator, Image,
+  Platform, RefreshControl, Modal, ActivityIndicator, Image, Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/auth";
 import { useUpload } from "@/hooks/useUpload";
 import { UploadProgressBar } from "@/components/MediaViewer";
 
+// Importar Supabase
+import { supabase } from "@/lib/supabase";
+
 export default function MiProgresoScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user } = useAuth();
+  
   const [showModal, setShowModal] = useState(false);
   const [fecha, setFecha] = useState(new Date().toISOString().split("T")[0]);
   const [peso, setPeso] = useState("");
@@ -26,38 +29,68 @@ export default function MiProgresoScreen() {
   const [notas, setNotas] = useState("");
   const [fotoUrl, setFotoUrl] = useState("");
   const [error, setError] = useState("");
+  
   const photoUpload = useUpload();
   const [refreshing, setRefreshing] = useState(false);
 
+  // 1. OBTENER PROGRESO DESDE SUPABASE
   const { data: progressData, refetch } = useQuery({
-    queryKey: ["/api/progress", user?.id],
+    queryKey: ["client_progress", user?.id],
     enabled: !!user?.id,
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/progress");
-      return res.json();
+      const { data, error } = await supabase
+        .from("progreso")
+        .select("*")
+        .eq("cliente_id", user?.id)
+        .order("fecha", { ascending: false });
+
+      if (error) throw new Error(error.message);
+      return { entries: data || [] };
     },
   });
 
+  // 2. GUARDAR UN NUEVO REGISTRO EN SUPABASE
   const createMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/progress", {
-        fecha,
-        peso: peso ? Number(peso) : undefined,
-        grasaCorporal: grasa ? Number(grasa) : undefined,
-        masaMuscular: musculo ? Number(musculo) : undefined,
-        cintura: cintura ? Number(cintura) : undefined,
-        notas: notas || undefined,
-        fotoUrl: fotoUrl || undefined,
-      });
-      return res.json();
+      if (!user?.id) throw new Error("No estás autenticado");
+
+      // Primero necesitamos saber quién es el entrenador del cliente para vincularlo
+      const { data: miPerfil, error: perfilError } = await supabase
+        .from("perfiles")
+        .select("entrenador_id")
+        .eq("id", user.id)
+        .single();
+
+      if (perfilError) throw new Error("No se pudo obtener la información de tu cuenta");
+      if (!miPerfil?.entrenador_id) throw new Error("Aún no tienes un entrenador asignado");
+
+      // Guardamos el registro en la base de datos
+      const { error: insertError } = await supabase
+        .from("progreso")
+        .insert([{
+          cliente_id: user.id,
+          entrenador_id: miPerfil.entrenador_id,
+          fecha,
+          peso: peso ? Number(peso) : null,
+          grasa_corporal: grasa ? Number(grasa) : null,
+          masa_muscular: musculo ? Number(musculo) : null,
+          cintura: cintura ? Number(cintura) : null,
+          notas: notas || null,
+          foto_url: fotoUrl || null,
+        }]);
+
+      if (insertError) throw new Error(insertError.message);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/progress"] });
+      qc.invalidateQueries({ queryKey: ["client_progress", user?.id] });
       setShowModal(false);
       resetForm();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
-    onError: (err: any) => setError(err.message || "Error al guardar"),
+    onError: (err: any) => {
+      setError(err.message || "Error al guardar");
+      Alert.alert("Error", err.message);
+    },
   });
 
   const resetForm = () => {
@@ -71,14 +104,13 @@ export default function MiProgresoScreen() {
     setRefreshing(true);
     await refetch();
     setRefreshing(false);
-  }, []);
+  }, [refetch]);
 
   const pickPhoto = async () => {
     photoUpload.reset();
     const result = await photoUpload.pickAndUpload("images");
     if (result) {
       setFotoUrl(result.url);
-      console.log("[progreso] Foto subida:", result.url);
     }
   };
 

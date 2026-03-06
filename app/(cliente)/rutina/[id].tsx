@@ -9,24 +9,52 @@ import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import { MediaViewer } from "@/components/MediaViewer";
+
+// Importar Supabase
+import { supabase } from "@/lib/supabase";
 
 export default function ClienteRutinaDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [refreshing, setRefreshing] = useState(false);
 
+  // 1. OBTENER DETALLE DE RUTINA Y EJERCICIOS DESDE SUPABASE
   const { data, refetch, isLoading, isError } = useQuery({
-    queryKey: ["/api/routines", id],
+    queryKey: ["client_routine_details", id],
     enabled: !!id,
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/routines/${id}`);
-      return res.json();
+      // Buscar la rutina y los datos del entrenador
+      const { data: routineData, error: routineError } = await supabase
+        .from("rutinas")
+        .select(`
+          *,
+          perfiles:entrenador_id (nombre, apellido)
+        `)
+        .eq("id", id)
+        .single();
+
+      if (routineError) throw new Error(routineError.message);
+
+      // Buscar los ejercicios
+      const { data: exercisesData, error: exercisesError } = await supabase
+        .from("ejercicios")
+        .select("*")
+        .eq("rutina_id", id)
+        .order("orden", { ascending: true });
+
+      if (exercisesError) throw new Error(exercisesError.message);
+
+      return {
+        routine: {
+          ...routineData,
+          trainer_nombre: routineData.perfiles?.nombre,
+          trainer_apellido: routineData.perfiles?.apellido,
+        },
+        exercises: exercisesData || [],
+      };
     },
-    staleTime: 1000 * 60 * 2,
-    gcTime: 1000 * 60 * 30,
-    refetchInterval: 1000 * 30,
+    staleTime: 1000 * 60 * 5,
   });
 
   const onRefresh = async () => {
@@ -36,12 +64,13 @@ export default function ClienteRutinaDetailScreen() {
   };
 
   const routine = data?.routine;
-  const exercises: any[] = data?.exercises || [];
+  const exercises = data?.exercises || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
 
   const nivelColor = (n: string) => {
-    if (n === "principiante") return Colors.success;
-    if (n === "avanzado") return Colors.accent;
+    const nivel = n?.toLowerCase();
+    if (nivel === "principiante") return Colors.success;
+    if (nivel === "avanzado") return Colors.accent;
     return Colors.accentBlue;
   };
 
@@ -59,9 +88,9 @@ export default function ClienteRutinaDetailScreen() {
       <View style={[styles.center, { backgroundColor: Colors.background }]}>
         <Ionicons name="warning-outline" size={48} color={Colors.error} />
         <Text style={styles.errorTitle}>No se pudo cargar</Text>
-        <Text style={styles.errorSubtitle}>Comprueba tu conexión e intenta de nuevo</Text>
-        <Pressable style={styles.retryBtn} onPress={() => refetch()}>
-          <Text style={styles.retryBtnText}>Reintentar</Text>
+        <Text style={styles.errorSubtitle}>La rutina no existe o no tienes acceso</Text>
+        <Pressable style={styles.retryBtn} onPress={() => router.back()}>
+          <Text style={styles.retryBtnText}>Regresar</Text>
         </Pressable>
       </View>
     );
@@ -82,7 +111,7 @@ export default function ClienteRutinaDetailScreen() {
           onPress={() => router.back()}
         >
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
-          <Text style={styles.backText}>Mis Rutinas</Text>
+          <Text style={styles.backText}>Atrás</Text>
         </Pressable>
 
         {/* Routine header */}
@@ -112,7 +141,7 @@ export default function ClienteRutinaDetailScreen() {
             {(routine.trainer_nombre || routine.trainer_apellido) && (
               <View style={styles.metaItem}>
                 <Ionicons name="person" size={14} color={Colors.textMuted} />
-                <Text style={styles.metaText}>{routine.trainer_nombre} {routine.trainer_apellido}</Text>
+                <Text style={styles.metaText}>Coach: {routine.trainer_nombre} {routine.trainer_apellido}</Text>
               </View>
             )}
           </View>
@@ -124,12 +153,8 @@ export default function ClienteRutinaDetailScreen() {
             <Ionicons name="barbell-outline" size={48} color={Colors.textMuted} />
             <Text style={styles.emptyTitle}>Sin ejercicios aún</Text>
             <Text style={styles.emptySubtitle}>
-              Tu entrenador está preparando los ejercicios. Vuelve pronto.
+              Tu entrenador aún no ha añadido ejercicios a esta rutina.
             </Text>
-            <Pressable style={styles.refreshBtn} onPress={() => refetch()}>
-              <Ionicons name="refresh" size={16} color={Colors.primary} />
-              <Text style={styles.refreshBtnText}>Actualizar</Text>
-            </Pressable>
           </View>
         ) : (
           <>
@@ -163,7 +188,7 @@ function ExerciseCard({ exercise: ex, index: idx }: { exercise: any; index: numb
         <View style={styles.exHeaderRight}>
           {hasMedia && (
             <View style={styles.mediaBadge}>
-              <Ionicons name="image" size={12} color={Colors.primary} />
+              <Ionicons name="videocam" size={12} color={Colors.primary} />
             </View>
           )}
           <Ionicons
@@ -174,7 +199,6 @@ function ExerciseCard({ exercise: ex, index: idx }: { exercise: any; index: numb
         </View>
       </View>
 
-      {/* Stats row — always visible */}
       <View style={styles.exStats}>
         {ex.series && (
           <View style={styles.exStatItem}>
@@ -202,7 +226,6 @@ function ExerciseCard({ exercise: ex, index: idx }: { exercise: any; index: numb
         )}
       </View>
 
-      {/* Expanded section */}
       {expanded && (
         <>
           {ex.descripcion ? (
@@ -211,7 +234,7 @@ function ExerciseCard({ exercise: ex, index: idx }: { exercise: any; index: numb
 
           {ex.imagen_url ? (
             <View style={styles.mediaContainer}>
-              <Text style={styles.mediaLabel}>Imagen de referencia</Text>
+              <Text style={styles.mediaLabel}>Imagen</Text>
               <MediaViewer
                 uri={ex.imagen_url}
                 isVideo={false}
@@ -222,7 +245,7 @@ function ExerciseCard({ exercise: ex, index: idx }: { exercise: any; index: numb
 
           {ex.video_url ? (
             <View style={styles.mediaContainer}>
-              <Text style={styles.mediaLabel}>Video de demostración</Text>
+              <Text style={styles.mediaLabel}>Video demostrativo</Text>
               <MediaViewer
                 uri={ex.video_url}
                 isVideo={true}
@@ -370,21 +393,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     paddingHorizontal: 12,
   },
-  refreshBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: Colors.primary + "22",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginTop: 8,
-  },
-  refreshBtnText: {
-    fontFamily: "Outfit_600SemiBold",
-    fontSize: 14,
-    color: Colors.primary,
-  },
   sectionTitle: {
     fontFamily: "Outfit_700Bold",
     fontSize: 18,
@@ -483,7 +491,7 @@ const styles = StyleSheet.create({
   },
   exMediaThumb: {
     width: "100%",
-    height: 180,
+    height: 200,
     borderRadius: 12,
   },
 });

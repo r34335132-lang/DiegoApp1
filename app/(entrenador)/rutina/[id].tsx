@@ -9,15 +9,18 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
-import { apiRequest } from "@/lib/query-client";
 import { useUpload } from "@/hooks/useUpload";
 import { MediaViewer, InlineVideo, UploadProgressBar } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
+
+// Importamos Supabase
+import { supabase } from "@/lib/supabase";
 
 export default function RutinaDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
+  
   const [showModal, setShowModal] = useState(false);
   const [nombre, setNombre] = useState("");
   const [descripcion, setDescripcion] = useState("");
@@ -32,33 +35,55 @@ export default function RutinaDetailScreen() {
   const imgUpload = useUpload();
   const vidUpload = useUpload();
 
+  // 1. OBTENER LA RUTINA Y SUS EJERCICIOS DESDE SUPABASE
   const { data, refetch } = useQuery({
-    queryKey: ["/api/routines", id],
+    queryKey: ["routine_details", id],
     enabled: !!id,
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/routines/${id}`);
-      return res.json();
+      // Buscar la rutina
+      const { data: routineData, error: routineError } = await supabase
+        .from("rutinas")
+        .select("*")
+        .eq("id", id)
+        .single();
+        
+      if (routineError) throw new Error(routineError.message);
+
+      // Buscar los ejercicios que pertenecen a esta rutina
+      const { data: exercisesData, error: exercisesError } = await supabase
+        .from("ejercicios")
+        .select("*")
+        .eq("rutina_id", id)
+        .order("orden", { ascending: true });
+        
+      if (exercisesError) throw new Error(exercisesError.message);
+
+      return { routine: routineData, exercises: exercisesData || [] };
     },
   });
 
+  // 2. AGREGAR EJERCICIO A SUPABASE
   const addExMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/exercises", {
-        routineId: id,
-        nombre: nombre.trim(),
-        descripcion: descripcion.trim() || undefined,
-        series: Number(series) || 3,
-        repeticiones: reps,
-        peso: peso || undefined,
-        descanso,
-        imagenUrl: imagenUrl || undefined,
-        videoUrl: videoUrl || undefined,
-        orden: (data?.exercises?.length || 0),
-      });
-      return res.json();
+      const { error: insertError } = await supabase
+        .from("ejercicios")
+        .insert([{
+          rutina_id: id,
+          nombre: nombre.trim(),
+          descripcion: descripcion.trim() || null,
+          series: Number(series) || 3,
+          repeticiones: reps,
+          peso: peso || null,
+          descanso,
+          imagen_url: imagenUrl || null,
+          video_url: videoUrl || null,
+          orden: data?.exercises?.length || 0,
+        }]);
+
+      if (insertError) throw new Error(insertError.message);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/routines", id] });
+      qc.invalidateQueries({ queryKey: ["routine_details", id] });
       setShowModal(false);
       resetForm();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -66,13 +91,18 @@ export default function RutinaDetailScreen() {
     onError: (err: any) => setError(err.message || "Error al agregar"),
   });
 
+  // 3. ELIMINAR EJERCICIO
   const deleteExMutation = useMutation({
     mutationFn: async (exId: string) => {
-      const res = await apiRequest("DELETE", `/api/exercises/${exId}`);
-      return res.json();
+      const { error } = await supabase
+        .from("ejercicios")
+        .delete()
+        .eq("id", exId);
+        
+      if (error) throw new Error(error.message);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/routines", id] });
+      qc.invalidateQueries({ queryKey: ["routine_details", id] });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     },
   });
@@ -89,7 +119,6 @@ export default function RutinaDetailScreen() {
     const result = await imgUpload.pickAndUpload("images");
     if (result) {
       setImagenUrl(result.url);
-      console.log("[rutina] Imagen subida:", result.url);
     }
   };
 
@@ -98,7 +127,6 @@ export default function RutinaDetailScreen() {
     const result = await vidUpload.pickAndUpload("videos");
     if (result) {
       setVideoUrl(result.url);
-      console.log("[rutina] Video subido:", result.url);
     }
   };
 
