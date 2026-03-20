@@ -11,8 +11,6 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/context/auth";
 import { sendLocalNotification } from "@/hooks/useNotifications";
-
-// Importar Supabase
 import { supabase } from "@/lib/supabase";
 
 interface Exercise {
@@ -25,6 +23,7 @@ interface Exercise {
   descanso: string | null;
   imagen_url: string | null;
   video_url: string | null;
+  orden?: number;
 }
 
 interface Routine {
@@ -35,6 +34,7 @@ interface Routine {
   trainer_nombre: string | null;
   trainer_apellido: string | null;
   trainer_id?: string;
+  ejercicios?: Exercise[]; // <-- Agregamos los ejercicios aquí
 }
 
 type WorkoutPhase = "select" | "working" | "resting" | "complete";
@@ -99,17 +99,18 @@ export default function EntrenarScreen() {
   useEffect(() => { setsCompletedRef.current = setsCompleted; }, [setsCompleted]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
-  // 1. CARGAR RUTINAS DESDE SUPABASE
+  // 1. CARGAR RUTINAS Y EJERCICIOS JUNTOS (Para que funcione Offline)
   const { data: routinesData } = useQuery({
-    queryKey: ["client_routines_list", user?.id],
+    queryKey: ["client_routines_list_offline", user?.id],
     enabled: !!user?.id,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("rutinas")
         .select(`
           *,
-          perfiles:entrenador_id (nombre, apellido)
-        `)
+          perfiles:entrenador_id (nombre, apellido),
+          ejercicios (*) 
+        `) // <-- La magia está aquí: Traemos los ejercicios anidados
         .eq("cliente_id", user?.id)
         .order("created_at", { ascending: false });
 
@@ -120,14 +121,15 @@ export default function EntrenarScreen() {
         trainer_nombre: r.perfiles?.nombre,
         trainer_apellido: r.perfiles?.apellido,
         trainer_id: r.entrenador_id,
+        ejercicios: r.ejercicios?.sort((a: any, b: any) => (a.orden || 0) - (b.orden || 0)) || []
       }));
 
       return { routines: formatted };
     },
-    staleTime: 1000 * 60,
+    staleTime: 1000 * 60 * 60, // Mantenemos la caché viva por 1 hora
   });
 
-  // 2. INICIAR SESIÓN DE ENTRENAMIENTO
+  // 2. INICIAR SESIÓN DE ENTRENAMIENTO (Tolerante a fallos offline)
   const startSessionMutation = useMutation({
     mutationFn: async (data: { routineId: string; totalExercises: number }) => {
       const { data: sessionData, error } = await supabase
@@ -145,7 +147,7 @@ export default function EntrenarScreen() {
       if (error) throw new Error(error.message);
       return sessionData;
     },
-    onError: (err) => console.warn("[entrenar] startSession error:", err),
+    onError: (err) => console.log("[Modo Offline] No se pudo crear la sesión en DB, pero el cronómetro seguirá."),
   });
 
   // 3. FINALIZAR SESIÓN DE ENTRENAMIENTO
@@ -162,7 +164,7 @@ export default function EntrenarScreen() {
       if (error) throw new Error(error.message);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
-    onError: (err) => console.warn("[entrenar] finishSession error:", err),
+    onError: (err) => console.log("[Modo Offline] El progreso se quedará en local."),
   });
 
   // 4. ENVIAR RESUMEN AL ENTRENADOR VÍA CHAT
@@ -180,7 +182,6 @@ export default function EntrenarScreen() {
       if (error) throw new Error(error.message);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["client_chats_preview"] }),
-    onError: (err) => console.warn("[entrenar] sendSummary error:", err),
   });
 
   const stopAllTimers = useCallback(() => {
@@ -258,16 +259,14 @@ export default function EntrenarScreen() {
 
   const loadRoutineDetail = async (routine: Routine) => {
     try {
-      // Obtenemos los ejercicios de la rutina seleccionada
-      const { data, error } = await supabase
-        .from("ejercicios")
-        .select("*")
-        .eq("rutina_id", routine.id)
-        .order("orden", { ascending: true });
+      // YA NO HACEMOS FETCH A LA BASE DE DATOS AQUÍ.
+      // Usamos los ejercicios que ya vienen anidados desde la caché.
+      const exList = routine.ejercicios || [];
 
-      if (error) throw new Error(error.message);
-
-      const exList: Exercise[] = data || [];
+      if (exList.length === 0) {
+        Alert.alert("Rutina vacía", "Esta rutina no tiene ejercicios asignados.");
+        return;
+      }
 
       setExercises(exList);
       setSelectedRoutine(routine);
@@ -284,11 +283,18 @@ export default function EntrenarScreen() {
       startTotalTimer();
       startSetTimer();
 
-      const session = await startSessionMutation.mutateAsync({
-        routineId: routine.id,
-        totalExercises: exList.length,
-      });
-      setSessionId(session.id || null);
+      // Intentamos iniciar la sesión en DB. Si falla (por falta de internet), 
+      // generamos un ID falso para que la app no crashee y permita seguir.
+      try {
+        const session = await startSessionMutation.mutateAsync({
+          routineId: routine.id,
+          totalExercises: exList.length,
+        });
+        setSessionId(session.id || null);
+      } catch (e) {
+        setSessionId("offline_session_" + Date.now()); // Fallback offline
+      }
+      
     } catch {
       Alert.alert("Error", "No se pudo cargar la rutina");
     }
@@ -304,8 +310,8 @@ export default function EntrenarScreen() {
     const exList = exercisesRef.current;
     const selRoutine = selectedRoutineRef.current;
 
-    // 1. Guardamos la sesión en Supabase
-    if (sid) {
+    // Solo intentamos actualizar en DB si el ID no es el que generamos offline
+    if (sid && !sid.startsWith("offline_")) {
       finishSessionMutation.mutate({
         id: sid,
         durationSeconds: currentTotal,
@@ -317,43 +323,35 @@ export default function EntrenarScreen() {
     const routine = routines.find((r: any) => r.id === selRoutine?.id);
     const trainerId = routine?.trainer_id;
 
-    // 2. Construimos y enviamos el reporte detallado al entrenador
     if (trainerId) {
       const mins = Math.floor(currentTotal / 60);
       const totalSetsInRoutine = exList.reduce((sum, ex) => sum + (ex.series || 1), 0);
       
-      // Construimos el encabezado del reporte
       let reporte = `✅ ¡Entrenamiento Completado!\n`;
       reporte += `📋 Rutina: ${selRoutine?.nombre}\n`;
       reporte += `⏱️ Tiempo: ${mins} min\n`;
       reporte += `📊 Progreso: ${completed}/${exList.length} ejercicios (${setsCompl}/${totalSetsInRoutine} series)\n\n`;
       reporte += `*Desglose de ejercicios:*\n`;
 
-      // Recorremos solo los ejercicios que completó el cliente
       for (let i = 0; i < completed; i++) {
         const ex = exList[i];
         if (ex) {
           reporte += `- ${ex.nombre}: ${ex.series} series x ${ex.repeticiones} reps`;
-          if (ex.peso) {
-             reporte += ` (${ex.peso})`;
-          }
+          if (ex.peso) reporte += ` (${ex.peso})`;
           reporte += `\n`;
         }
       }
 
-      // Si no terminó todos los ejercicios, agregamos una nota
       if (completed < exList.length) {
          reporte += `\n⚠️ Nota: El entrenamiento se terminó antes de completar todos los ejercicios.`;
       }
 
-      // Enviamos el mensaje a Supabase
       sendSummaryMutation.mutate({
         receiverId: trainerId,
         contenido: reporte,
       });
     }
 
-    // 3. Notificación local para el cliente
     sendLocalNotification(
       "¡Entrenamiento completado!",
       `Completaste ${completed} ejercicio${completed !== 1 ? "s" : ""} en ${Math.floor(currentTotal / 60)} minutos.`
@@ -594,7 +592,7 @@ export default function EntrenarScreen() {
               ) : null}
             </View>
 
-            {ex.video_url ? (
+            {ex.video_url && !isPaused ? (
               <View style={styles.videoInlineWrapper}>
                 <InlineVideo uri={ex.video_url} />
               </View>
@@ -692,7 +690,9 @@ export default function EntrenarScreen() {
             <Ionicons name="trophy" size={60} color={Colors.primary} />
           </View>
           <Text style={styles.completeTitle}>¡Entrenamiento Completado!</Text>
-          <Text style={styles.completeSubtitle}>Excelente trabajo. Tu entrenador ha sido notificado.</Text>
+          <Text style={styles.completeSubtitle}>
+            Excelente trabajo. Tu entrenador ha sido notificado (si tienes conexión).
+          </Text>
 
           <View style={styles.completeSummary}>
             <View style={styles.completeStat}>
@@ -725,6 +725,7 @@ export default function EntrenarScreen() {
   return null;
 }
 
+// ... LOS ESTILOS SE MANTIENEN EXACTAMENTE IGUAL A TU CÓDIGO ANTERIOR ...
 const styles = StyleSheet.create({
   headerContainer: {
     paddingHorizontal: 20,

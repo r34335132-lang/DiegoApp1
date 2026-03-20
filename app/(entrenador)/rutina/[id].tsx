@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, Modal, ActivityIndicator,
+  Platform, Modal, ActivityIndicator, KeyboardAvoidingView
 } from "react-native";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,17 +10,18 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { useUpload } from "@/hooks/useUpload";
-import { MediaViewer, InlineVideo, UploadProgressBar } from "@/components/MediaViewer";
+import { InlineVideo, UploadProgressBar } from "@/components/MediaViewer";
 import * as Haptics from "expo-haptics";
-
-// Importamos Supabase
+import { useAuth } from "@/context/auth";
 import { supabase } from "@/lib/supabase";
 
 export default function RutinaDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
+  const { user } = useAuth();
   
+  // Modal Agregar Ejercicio
   const [showModal, setShowModal] = useState(false);
   const [nombre, setNombre] = useState("");
   const [descripcion, setDescripcion] = useState("");
@@ -32,24 +33,32 @@ export default function RutinaDetailScreen() {
   const [videoUrl, setVideoUrl] = useState("");
   const [error, setError] = useState("");
 
+  // Modal Editar Rutina
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editNombre, setEditNombre] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editNivel, setEditNivel] = useState("");
+  const [editClienteId, setEditClienteId] = useState<string | null>(null);
+
   const imgUpload = useUpload();
   const vidUpload = useUpload();
 
-  // 1. OBTENER LA RUTINA Y SUS EJERCICIOS DESDE SUPABASE
+  // 1. OBTENER LA RUTINA Y SUS EJERCICIOS
   const { data, refetch } = useQuery({
     queryKey: ["routine_details", id],
     enabled: !!id,
     queryFn: async () => {
-      // Buscar la rutina
       const { data: routineData, error: routineError } = await supabase
         .from("rutinas")
-        .select("*")
+        .select(`
+          *,
+          perfiles:cliente_id (nombre, apellido)
+        `)
         .eq("id", id)
         .single();
         
       if (routineError) throw new Error(routineError.message);
 
-      // Buscar los ejercicios que pertenecen a esta rutina
       const { data: exercisesData, error: exercisesError } = await supabase
         .from("ejercicios")
         .select("*")
@@ -62,7 +71,58 @@ export default function RutinaDetailScreen() {
     },
   });
 
-  // 2. AGREGAR EJERCICIO A SUPABASE
+  // 2. OBTENER PACIENTES DEL ENTRENADOR (Para el selector de asignar rutina)
+  const { data: misClientes } = useQuery({
+    queryKey: ["my_clients_for_assignment", user?.id],
+    enabled: !!user?.id,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("perfiles")
+        .select("id, nombre, apellido")
+        .eq("rol", "cliente")
+        .eq("entrenador_id", user?.id);
+        
+      if (error) throw new Error(error.message);
+      return data || [];
+    }
+  });
+
+  // Precargar datos al abrir modal de edición de rutina
+  useEffect(() => {
+    if (data?.routine && showEditModal) {
+      setEditNombre(data.routine.nombre || "");
+      setEditDesc(data.routine.descripcion || "");
+      setEditNivel(data.routine.nivel || "Principiante");
+      setEditClienteId(data.routine.cliente_id || null);
+    }
+  }, [showEditModal, data?.routine]);
+
+  // MUTACIÓN PARA EDITAR RUTINA
+  const editRoutineMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("rutinas")
+        .update({
+          nombre: editNombre.trim(),
+          descripcion: editDesc.trim() || null,
+          nivel: editNivel,
+          cliente_id: editClienteId,
+        })
+        .eq("id", id);
+
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["routine_details", id] });
+      qc.invalidateQueries({ queryKey: ["routines", user?.id] });
+      qc.invalidateQueries({ queryKey: ["routines_index", user?.id] });
+      setShowEditModal(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (err: any) => Alert.alert("Error", err.message || "No se pudo actualizar la rutina"),
+  });
+
+  // MUTACIÓN AGREGAR EJERCICIO
   const addExMutation = useMutation({
     mutationFn: async () => {
       const { error: insertError } = await supabase
@@ -91,7 +151,7 @@ export default function RutinaDetailScreen() {
     onError: (err: any) => setError(err.message || "Error al agregar"),
   });
 
-  // 3. ELIMINAR EJERCICIO
+  // MUTACIÓN ELIMINAR EJERCICIO
   const deleteExMutation = useMutation({
     mutationFn: async (exId: string) => {
       const { error } = await supabase
@@ -117,17 +177,13 @@ export default function RutinaDetailScreen() {
   const handlePickImage = async () => {
     imgUpload.reset();
     const result = await imgUpload.pickAndUpload("images");
-    if (result) {
-      setImagenUrl(result.url);
-    }
+    if (result) setImagenUrl(result.url);
   };
 
   const handlePickVideo = async () => {
     vidUpload.reset();
     const result = await vidUpload.pickAndUpload("videos");
-    if (result) {
-      setVideoUrl(result.url);
-    }
+    if (result) setVideoUrl(result.url);
   };
 
   const routine = data?.routine;
@@ -156,12 +212,20 @@ export default function RutinaDetailScreen() {
           >
             <Ionicons name="arrow-back" size={24} color={Colors.text} />
           </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.8 }]}
-            onPress={() => setShowModal(true)}
-          >
-            <Ionicons name="add" size={22} color={Colors.primaryText} />
-          </Pressable>
+          <View style={{ flexDirection: "row", gap: 12 }}>
+            <Pressable
+              style={({ pressed }) => [styles.editRoutineBtn, pressed && { opacity: 0.8 }]}
+              onPress={() => setShowEditModal(true)}
+            >
+              <Ionicons name="pencil" size={20} color={Colors.text} />
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.8 }]}
+              onPress={() => setShowModal(true)}
+            >
+              <Ionicons name="add" size={22} color={Colors.primaryText} />
+            </Pressable>
+          </View>
         </View>
 
         <View style={styles.routineInfo}>
@@ -174,6 +238,16 @@ export default function RutinaDetailScreen() {
               <Text style={styles.nivelText}>{routine.nivel}</Text>
             </View>
             <Text style={styles.exerciseCount}>{exercises.length} ejercicios</Text>
+          </View>
+          
+          {/* Mostramos a quién está asignada la rutina */}
+          <View style={styles.assignedBox}>
+            <Ionicons name="person" size={16} color={Colors.textSecondary} />
+            <Text style={styles.assignedText}>
+              {routine.cliente_id 
+                ? `Asignada a: ${routine.perfiles?.nombre || ''} ${routine.perfiles?.apellido || ''}`
+                : "Plantilla (Sin asignar)"}
+            </Text>
           </View>
         </View>
 
@@ -252,192 +326,285 @@ export default function RutinaDetailScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* --- MODAL PARA EDITAR LA RUTINA (REASIGNAR) --- */}
+      <Modal visible={showEditModal} transparent animationType="slide" onRequestClose={() => setShowEditModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <Pressable style={styles.overlay} onPress={() => setShowEditModal(false)} />
+          <View style={[styles.modal, { paddingBottom: insets.bottom + 24, maxHeight: "90%" }]}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Editar Rutina</Text>
+
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              
+              <Text style={styles.label}>Nombre de la rutina</Text>
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Ej: Pecho y Tríceps"
+                  placeholderTextColor={Colors.textMuted}
+                  value={editNombre}
+                  onChangeText={setEditNombre}
+                />
+              </View>
+
+              <Text style={styles.label}>Descripción</Text>
+              <View style={[styles.inputContainer, { alignItems: "flex-start" }]}>
+                <TextInput
+                  style={[styles.modalInput, { height: 60, textAlignVertical: "top" }]}
+                  placeholder="Instrucciones generales..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={editDesc}
+                  onChangeText={setEditDesc}
+                  multiline
+                />
+              </View>
+
+              <Text style={styles.label}>Nivel</Text>
+              <View style={styles.levelRow}>
+                {["Principiante", "Intermedio", "Avanzado"].map((lvl) => (
+                  <Pressable
+                    key={lvl}
+                    style={[styles.levelChip, editNivel === lvl && styles.levelChipActive]}
+                    onPress={() => setEditNivel(lvl)}
+                  >
+                    <Text style={[styles.levelChipText, editNivel === lvl && styles.levelChipTextActive]}>{lvl}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.label}>Asignar a Paciente</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
+                <Pressable
+                  style={[styles.clientChip, editClienteId === null && styles.clientChipActive]}
+                  onPress={() => setEditClienteId(null)}
+                >
+                  <Text style={[styles.clientChipText, editClienteId === null && styles.clientChipTextActive]}>Ninguno</Text>
+                </Pressable>
+                {misClientes?.map((c: any) => (
+                  <Pressable
+                    key={c.id}
+                    style={[styles.clientChip, editClienteId === c.id && styles.clientChipActive]}
+                    onPress={() => setEditClienteId(c.id)}
+                  >
+                    <Text style={[styles.clientChipText, editClienteId === c.id && styles.clientChipTextActive]}>
+                      {c.nombre} {c.apellido}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  editRoutineMutation.isPending && styles.btnDisabled,
+                  pressed && { opacity: 0.85 },
+                ]}
+                onPress={() => editRoutineMutation.mutate()}
+                disabled={editRoutineMutation.isPending}
+              >
+                {editRoutineMutation.isPending ? (
+                  <ActivityIndicator color={Colors.primaryText} />
+                ) : (
+                  <Text style={styles.confirmBtnText}>Guardar Cambios</Text>
+                )}
+              </Pressable>
+
+              <Pressable style={styles.cancelBtn} onPress={() => setShowEditModal(false)}>
+                <Text style={styles.cancelBtnText}>Cancelar</Text>
+              </Pressable>
+
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* --- MODAL PARA AGREGAR EJERCICIO --- */}
       <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => { setShowModal(false); resetForm(); }}>
-        <Pressable style={styles.overlay} onPress={() => { setShowModal(false); resetForm(); }} />
-        <ScrollView
-          style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.modalHandle} />
-          <Text style={styles.modalTitle}>Nuevo Ejercicio</Text>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <Pressable style={styles.overlay} onPress={() => { setShowModal(false); resetForm(); }} />
+          <View style={[styles.modal, { paddingBottom: insets.bottom + 24, maxHeight: "90%" }]}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Nuevo Ejercicio</Text>
 
-          {error ? (
-            <View style={styles.errorBox}>
-              <Ionicons name="alert-circle" size={16} color={Colors.error} />
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          ) : null}
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {error ? (
+                <View style={styles.errorBox}>
+                  <Ionicons name="alert-circle" size={16} color={Colors.error} />
+                  <Text style={styles.errorText}>{error}</Text>
+                </View>
+              ) : null}
 
-          <Text style={styles.label}>Nombre del ejercicio *</Text>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="Ej: Sentadilla con barra"
-              placeholderTextColor={Colors.textMuted}
-              value={nombre}
-              onChangeText={(t) => { setNombre(t); setError(""); }}
-            />
-          </View>
-
-          <Text style={styles.label}>Descripción (opcional)</Text>
-          <View style={[styles.inputContainer, { alignItems: "flex-start" }]}>
-            <TextInput
-              style={[styles.modalInput, { height: 60, textAlignVertical: "top" }]}
-              placeholder="Técnica y consejos..."
-              placeholderTextColor={Colors.textMuted}
-              value={descripcion}
-              onChangeText={setDescripcion}
-              multiline
-            />
-          </View>
-
-          <View style={styles.statsRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Series</Text>
+              <Text style={styles.label}>Nombre del ejercicio *</Text>
               <View style={styles.inputContainer}>
                 <TextInput
                   style={styles.modalInput}
-                  placeholder="3"
+                  placeholder="Ej: Sentadilla con barra"
                   placeholderTextColor={Colors.textMuted}
-                  value={series}
-                  onChangeText={setSeries}
-                  keyboardType="number-pad"
+                  value={nombre}
+                  onChangeText={(t) => { setNombre(t); setError(""); }}
                 />
               </View>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Reps</Text>
+
+              <Text style={styles.label}>Descripción (opcional)</Text>
+              <View style={[styles.inputContainer, { alignItems: "flex-start" }]}>
+                <TextInput
+                  style={[styles.modalInput, { height: 60, textAlignVertical: "top" }]}
+                  placeholder="Técnica y consejos..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={descripcion}
+                  onChangeText={setDescripcion}
+                  multiline
+                />
+              </View>
+
+              <View style={styles.statsRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Series</Text>
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="3"
+                      placeholderTextColor={Colors.textMuted}
+                      value={series}
+                      onChangeText={setSeries}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Reps</Text>
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="10"
+                      placeholderTextColor={Colors.textMuted}
+                      value={reps}
+                      onChangeText={setReps}
+                    />
+                  </View>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Peso</Text>
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="60 kg"
+                      placeholderTextColor={Colors.textMuted}
+                      value={peso}
+                      onChangeText={setPeso}
+                    />
+                  </View>
+                </View>
+              </View>
+
+              <Text style={styles.label}>Descanso</Text>
               <View style={styles.inputContainer}>
                 <TextInput
                   style={styles.modalInput}
-                  placeholder="10"
+                  placeholder="60s"
                   placeholderTextColor={Colors.textMuted}
-                  value={reps}
-                  onChangeText={setReps}
+                  value={descanso}
+                  onChangeText={setDescanso}
                 />
               </View>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.label}>Peso</Text>
-              <View style={styles.inputContainer}>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="60 kg"
-                  placeholderTextColor={Colors.textMuted}
-                  value={peso}
-                  onChangeText={setPeso}
-                />
-              </View>
-            </View>
-          </View>
 
-          <Text style={styles.label}>Descanso</Text>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="60s"
-              placeholderTextColor={Colors.textMuted}
-              value={descanso}
-              onChangeText={setDescanso}
-            />
-          </View>
-
-          <Text style={styles.label}>Imagen de referencia</Text>
-          <Pressable
-            style={({ pressed }) => [
-              styles.mediaPickBtn,
-              !!imagenUrl && styles.mediaPickBtnSuccess,
-              pressed && { opacity: 0.8 },
-            ]}
-            onPress={handlePickImage}
-            disabled={imgUpload.uploading}
-          >
-            {imgUpload.uploading ? (
-              <ActivityIndicator color={Colors.primary} size="small" />
-            ) : (
-              <Ionicons
-                name={imagenUrl ? "checkmark-circle" : "image-outline"}
-                size={22}
-                color={imagenUrl ? Colors.success : Colors.primary}
+              <Text style={styles.label}>Imagen de referencia</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.mediaPickBtn,
+                  !!imagenUrl && styles.mediaPickBtnSuccess,
+                  pressed && { opacity: 0.8 },
+                ]}
+                onPress={handlePickImage}
+                disabled={imgUpload.uploading}
+              >
+                {imgUpload.uploading ? (
+                  <ActivityIndicator color={Colors.primary} size="small" />
+                ) : (
+                  <Ionicons
+                    name={imagenUrl ? "checkmark-circle" : "image-outline"}
+                    size={22}
+                    color={imagenUrl ? Colors.success : Colors.primary}
+                  />
+                )}
+                <Text style={[styles.mediaPickBtnText, !!imagenUrl && { color: Colors.success }]}>
+                  {imgUpload.uploading ? `Subiendo... ${imgUpload.progress}%` : imagenUrl ? "Imagen subida ✓" : "Seleccionar imagen"}
+                </Text>
+              </Pressable>
+              <UploadProgressBar
+                visible={imgUpload.uploading}
+                progress={imgUpload.progress}
+                error={imgUpload.error}
+                onRetry={imgUpload.error ? () => { imgUpload.reset(); handlePickImage(); } : undefined}
               />
-            )}
-            <Text style={[styles.mediaPickBtnText, !!imagenUrl && { color: Colors.success }]}>
-              {imgUpload.uploading ? `Subiendo... ${imgUpload.progress}%` : imagenUrl ? "Imagen subida ✓" : "Seleccionar imagen"}
-            </Text>
-          </Pressable>
-          <UploadProgressBar
-            visible={imgUpload.uploading}
-            progress={imgUpload.progress}
-            error={imgUpload.error}
-            onRetry={imgUpload.error ? () => { imgUpload.reset(); handlePickImage(); } : undefined}
-          />
-          {imagenUrl ? (
-            <Image
-              source={{ uri: imagenUrl }}
-              style={styles.previewImage}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-            />
-          ) : null}
+              {imagenUrl ? (
+                <Image
+                  source={{ uri: imagenUrl }}
+                  style={styles.previewImage}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                />
+              ) : null}
 
-          <Text style={[styles.label, { marginTop: 8 }]}>Video demostrativo</Text>
-          <Pressable
-            style={({ pressed }) => [
-              styles.mediaPickBtn,
-              !!videoUrl && styles.mediaPickBtnSuccess,
-              { borderColor: Colors.accentBlue + "66" },
-              pressed && { opacity: 0.8 },
-            ]}
-            onPress={handlePickVideo}
-            disabled={vidUpload.uploading}
-          >
-            {vidUpload.uploading ? (
-              <ActivityIndicator color={Colors.accentBlue} size="small" />
-            ) : (
-              <Ionicons
-                name={videoUrl ? "checkmark-circle" : "videocam-outline"}
-                size={22}
-                color={videoUrl ? Colors.success : Colors.accentBlue}
+              <Text style={[styles.label, { marginTop: 8 }]}>Video demostrativo</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.mediaPickBtn,
+                  !!videoUrl && styles.mediaPickBtnSuccess,
+                  { borderColor: Colors.accentBlue + "66" },
+                  pressed && { opacity: 0.8 },
+                ]}
+                onPress={handlePickVideo}
+                disabled={vidUpload.uploading}
+              >
+                {vidUpload.uploading ? (
+                  <ActivityIndicator color={Colors.accentBlue} size="small" />
+                ) : (
+                  <Ionicons
+                    name={videoUrl ? "checkmark-circle" : "videocam-outline"}
+                    size={22}
+                    color={videoUrl ? Colors.success : Colors.accentBlue}
+                  />
+                )}
+                <Text style={[styles.mediaPickBtnText, { color: videoUrl ? Colors.success : Colors.accentBlue }, !!videoUrl && { color: Colors.success }]}>
+                  {vidUpload.uploading ? `Subiendo... ${vidUpload.progress}%` : videoUrl ? "Video subido ✓" : "Seleccionar video"}
+                </Text>
+              </Pressable>
+              <UploadProgressBar
+                visible={vidUpload.uploading}
+                progress={vidUpload.progress}
+                error={vidUpload.error}
+                onRetry={vidUpload.error ? () => { vidUpload.reset(); handlePickVideo(); } : undefined}
               />
-            )}
-            <Text style={[styles.mediaPickBtnText, { color: videoUrl ? Colors.success : Colors.accentBlue }, !!videoUrl && { color: Colors.success }]}>
-              {vidUpload.uploading ? `Subiendo... ${vidUpload.progress}%` : videoUrl ? "Video subido ✓" : "Seleccionar video"}
-            </Text>
-          </Pressable>
-          <UploadProgressBar
-            visible={vidUpload.uploading}
-            progress={vidUpload.progress}
-            error={vidUpload.error}
-            onRetry={vidUpload.error ? () => { vidUpload.reset(); handlePickVideo(); } : undefined}
-          />
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.confirmBtn,
-              (addExMutation.isPending || isUploading) && styles.btnDisabled,
-              pressed && { opacity: 0.85 },
-            ]}
-            onPress={() => {
-              if (!nombre.trim()) return setError("El nombre es requerido");
-              if (isUploading) return setError("Espera a que termine la subida");
-              addExMutation.mutate();
-            }}
-            disabled={addExMutation.isPending || isUploading}
-          >
-            {addExMutation.isPending ? (
-              <ActivityIndicator color={Colors.primaryText} />
-            ) : (
-              <Text style={styles.confirmBtnText}>Agregar Ejercicio</Text>
-            )}
-          </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  (addExMutation.isPending || isUploading) && styles.btnDisabled,
+                  pressed && { opacity: 0.85 },
+                ]}
+                onPress={() => {
+                  if (!nombre.trim()) return setError("El nombre es requerido");
+                  if (isUploading) return setError("Espera a que termine la subida");
+                  addExMutation.mutate();
+                }}
+                disabled={addExMutation.isPending || isUploading}
+              >
+                {addExMutation.isPending ? (
+                  <ActivityIndicator color={Colors.primaryText} />
+                ) : (
+                  <Text style={styles.confirmBtnText}>Agregar Ejercicio</Text>
+                )}
+              </Pressable>
 
-          <Pressable style={styles.cancelBtn} onPress={() => { setShowModal(false); resetForm(); }}>
-            <Text style={styles.cancelBtnText}>Cancelar</Text>
-          </Pressable>
+              <Pressable style={styles.cancelBtn} onPress={() => { setShowModal(false); resetForm(); }}>
+                <Text style={styles.cancelBtnText}>Cancelar</Text>
+              </Pressable>
 
-          <View style={{ height: 40 }} />
-        </ScrollView>
+              <View style={{ height: 40 }} />
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -456,6 +623,20 @@ const styles = StyleSheet.create({
     height: 40,
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  editRoutineBtn: {
+    backgroundColor: Colors.card,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   addBtn: {
     backgroundColor: Colors.primary,
@@ -484,6 +665,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+    marginBottom: 12,
   },
   nivelBadge: {
     backgroundColor: Colors.primary + "22",
@@ -501,6 +683,23 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_400Regular",
     fontSize: 14,
     color: Colors.textMuted,
+  },
+  assignedBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  assignedText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 13,
+    color: Colors.textSecondary,
   },
   emptyState: {
     alignItems: "center",
@@ -623,6 +822,8 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
   },
   modal: {
     backgroundColor: Colors.card,
@@ -634,6 +835,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     borderBottomWidth: 0,
+    marginTop: "auto",
   },
   modalHandle: {
     width: 40,
@@ -674,6 +876,53 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     marginBottom: 0,
+  },
+  levelRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 16,
+  },
+  levelChip: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  levelChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  levelChipText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  levelChipTextActive: {
+    color: Colors.primaryText,
+  },
+  clientChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginRight: 8,
+  },
+  clientChipActive: {
+    backgroundColor: Colors.accentBlue,
+    borderColor: Colors.accentBlue,
+  },
+  clientChipText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  clientChipTextActive: {
+    color: "#fff",
   },
   mediaPickBtn: {
     flexDirection: "row",

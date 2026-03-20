@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, TextInput, Pressable, StyleSheet,
-  ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Alert,
+  ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,7 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/auth";
 import Colors from "@/constants/colors";
 import * as Haptics from "expo-haptics";
-import { LinearGradient } from "expo-linear-gradient";
+import { supabase } from "@/lib/supabase"; // Importación necesaria para verificar estado
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -26,10 +26,29 @@ export default function LoginScreen() {
       setError("Por favor completa todos los campos");
       return;
     }
+    
     setLoading(true);
     try {
+      // 1. Verificar el estado de la cuenta ANTES de loguear
+      const { data: profile, error: profileError } = await supabase
+        .from('perfiles')
+        .select('estado')
+        .eq('email', email.trim().toLowerCase())
+        .maybeSingle();
+
+      if (profileError) {
+         throw new Error("No se pudo verificar el estado de la cuenta.");
+      }
+
+      // Si existe y está inactivo, bloqueamos el acceso
+      if (profile && profile.estado === 'inactivo') {
+        throw new Error("Tu cuenta está inactiva. Por favor, contacta a tu entrenador para renovar tu membresía.");
+      }
+
+      // 2. Si pasa la validación (es activo, pendiente o no existe aún en perfiles), procede al login real
       await login(email.trim(), password);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
     } catch (err: any) {
       setError(err.message || "Error al iniciar sesión");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -55,12 +74,14 @@ export default function LoginScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <LinearGradient
-            colors={[Colors.primary, Colors.primaryDark]}
-            style={styles.logoContainer}
-          >
-            <Ionicons name="barbell" size={32} color={Colors.primaryText} />
-          </LinearGradient>
+          {/* Aquí reemplazamos el gradiente por tu imagen local icon.png */}
+          <View style={styles.logoContainer}>
+            <Image 
+              source={require('@/assets/images/icon.png')} 
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
+          </View>
           <Text style={styles.appName}>Diego App</Text>
           <Text style={styles.tagline}>Tu plataforma de entrenamiento personal</Text>
         </View>
@@ -160,12 +181,15 @@ const styles = StyleSheet.create({
     marginBottom: 48,
   },
   logoContainer: {
-    width: 72,
-    height: 72,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 100, // Ajusta el tamaño según veas que queda mejor
+    height: 100,
     marginBottom: 16,
+    // borderRadius: 20, // Descomenta si tu logo es cuadrado y quieres redondearlo
+    // overflow: 'hidden'
+  },
+  logoImage: {
+    width: '100%',
+    height: '100%',
   },
   appName: {
     fontFamily: "Outfit_700Bold",

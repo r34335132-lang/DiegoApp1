@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "trainerpro",
+    "scheme": "diegoapp",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
@@ -15,33 +15,50 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.myapp"
+      "bundleIdentifier": "com.diegoln.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Diego App necesita acceso a la cámara para que puedas tomar fotos de tu progreso.",
+        "NSPhotoLibraryUsageDescription": "Diego App necesita acceso a tu galería para que puedas subir videos de ejercicios y fotos de progreso.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "com.myapp",
+      "package": "com.diegoln.app",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#09090B",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      }
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#09090B"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      [
-        "expo-router",
-        {
-          "origin": "https://replit.com/"
-        }
-      ],
+      "expo-router",
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Diego App necesita acceso a tus fotos para actualizar tu perfil y subir referencias de rutinas.",
+          "cameraPermission": "Diego App necesita acceso a tu cámara para tomar fotos de tu progreso."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "084c3e39-7bf6-4b8d-ab02-9e53f854cd0c"
+      }
     }
   }
 }

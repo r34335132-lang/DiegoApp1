@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
 import * as Haptics from "expo-haptics";
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/auth";
@@ -18,11 +19,24 @@ export default function ClientesScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user } = useAuth();
+  
+  // Estado para el modal de invitar
   const [showModal, setShowModal] = useState(false);
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
+
+  // Estado para el modal de editar membresía y estado
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [selectedClientToEdit, setSelectedClientToEdit] = useState<any>(null);
+  
+  // Fecha
+  const [fechaMembresia, setFechaMembresia] = useState<Date | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  
+  // Estado manual
+  const [isClientActive, setIsClientActive] = useState(true);
 
   const { data, refetch } = useQuery({
     queryKey: ["clients", user?.id],
@@ -44,9 +58,10 @@ export default function ClientesScreen() {
       if (errActivos) throw new Error(errActivos.message);
       if (errInvitaciones) throw new Error(errInvitaciones.message);
 
+      // Usamos el campo estado que acabamos de crear en Supabase
       const perfilesFormateados = (clientesActivos || []).map(c => ({
         ...c,
-        status: "activo"
+        status: c.estado || "activo" // Será "activo" o "inactivo"
       }));
 
       const invitacionesFormateadas = (invitaciones || []).map(inv => ({
@@ -79,7 +94,7 @@ export default function ClientesScreen() {
           throw new Error("Este correo pertenece a una cuenta de Entrenador.");
         }
 
-        // Lo vinculamos (AGREGAMOS .select().single() PARA EVITAR FALLOS SILENCIOSOS)
+        // Lo vinculamos 
         const { data: updatedData, error: updateError } = await supabase
           .from("perfiles")
           .update({ entrenador_id: user.id })
@@ -93,7 +108,7 @@ export default function ClientesScreen() {
         return { tipo: "vinculado" };
         
       } else {
-        // Paso B: Si no existe, lo invitamos (AGREGAMOS .select().single() TAMBIÉN)
+        // Paso B: Si no existe, lo invitamos 
         const { data: insertedData, error: inviteError } = await supabase
           .from("invitaciones")
           .insert([{ email: correoLimpio, entrenador_id: user.id }])
@@ -126,11 +141,71 @@ export default function ClientesScreen() {
     },
   });
 
+  // MUTACIÓN: Editar Cliente (Fecha y Estado) YA CORREGIDA
+  const editClientMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedClientToEdit?.id) throw new Error("Cliente no seleccionado");
+
+      let fechaStr = null;
+      if (fechaMembresia) {
+        // Formatear a YYYY-MM-DD respetando zona horaria local
+        const year = fechaMembresia.getFullYear();
+        const month = String(fechaMembresia.getMonth() + 1).padStart(2, '0');
+        const day = String(fechaMembresia.getDate()).padStart(2, '0');
+        fechaStr = `${year}-${month}-${day}`;
+      }
+
+      const payload: any = { 
+        fecha_membresia: fechaStr,
+        estado: isClientActive ? 'activo' : 'inactivo' // AHORA SÍ GUARDARÁ EL ESTADO EN SUPABASE
+      };
+      
+      const { error } = await supabase
+        .from("perfiles")
+        .update(payload)
+        .eq("id", selectedClientToEdit.id);
+
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["clients", user?.id] });
+      setShowEditModal(false);
+      setSelectedClientToEdit(null);
+      setFechaMembresia(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Éxito", "Datos del cliente actualizados.");
+    },
+    onError: (err: any) => {
+      Alert.alert("Error", err.message || "No se pudo actualizar al cliente");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  });
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refetch();
     setRefreshing(false);
   }, []);
+
+  const openEditModal = (client: any) => {
+    setSelectedClientToEdit(client);
+    setIsClientActive(client.status !== "inactivo");
+    
+    if (client.fecha_membresia) {
+      // Añadimos T12:00:00 para evitar que la zona horaria le reste un día
+      setFechaMembresia(new Date(client.fecha_membresia + "T12:00:00")); 
+    } else {
+      setFechaMembresia(new Date()); // Fecha actual por defecto si no tiene
+    }
+    
+    setShowEditModal(true);
+  };
+
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    const currentDate = selectedDate || fechaMembresia;
+    setShowDatePicker(Platform.OS === 'ios'); 
+    if (currentDate) setFechaMembresia(currentDate);
+  };
 
   const clients = (data?.clients || []).filter((c: any) => {
     const q = search.toLowerCase();
@@ -201,67 +276,78 @@ export default function ClientesScreen() {
             )}
           </View>
         ) : (
-          clients.map((client: any) => (
-            <View key={client.id} style={styles.clientCard}>
-              <View style={styles.clientLeft}>
-                {client.avatar_url ? (
-                  <Image source={{ uri: client.avatar_url }} style={styles.avatar} />
-                ) : (
-                  <LinearGradient
-                    colors={client.status === "activo" ? ["#374151", "#1F2937"] : ["#2A2A2A", "#1A1A1A"]}
-                    style={styles.avatar}
-                  >
-                    <Text style={styles.avatarText}>
-                      {(client.nombre || client.invite_email || "?")[0].toUpperCase()}
-                    </Text>
-                  </LinearGradient>
-                )}
-              </View>
+          clients.map((client: any) => {
+            // Lógica para determinar colores según estado
+            const isActivo = client.status === "activo";
+            const isInactivo = client.status === "inactivo";
+            const isPendiente = client.status === "pendiente";
 
-              <View style={styles.clientInfo}>
-                <Text style={styles.clientName}>
-                  {client.nombre
-                    ? `${client.nombre} ${client.apellido}`
-                    : client.invite_email || "Invitado"}
-                </Text>
-                <Text style={styles.clientEmail}>
-                  {client.email || client.invite_email || ""}
-                </Text>
-                <View style={styles.metaRow}>
-                  <View style={[
-                    styles.statusPill,
-                    { backgroundColor: client.status === "activo" ? Colors.success + "22" : Colors.warning + "22" }
-                  ]}>
-                    <View style={[
-                      styles.statusDot,
-                      { backgroundColor: client.status === "activo" ? Colors.success : Colors.warning }
-                    ]} />
-                    <Text style={[
-                      styles.statusText,
-                      { color: client.status === "activo" ? Colors.success : Colors.warning }
-                    ]}>
-                      {client.status === "activo" ? "Activo" : "Pendiente"}
-                    </Text>
+            const statusBgColor = isActivo ? Colors.success + "22" : isInactivo ? Colors.error + "22" : Colors.warning + "22";
+            const statusColor = isActivo ? Colors.success : isInactivo ? Colors.error : Colors.warning;
+            const statusLabel = isActivo ? "Activo" : isInactivo ? "Inactivo" : "Pendiente";
+
+            return (
+              <View key={client.id} style={styles.clientCard}>
+                <View style={styles.clientLeft}>
+                  {client.avatar_url ? (
+                    <Image source={{ uri: client.avatar_url }} style={styles.avatar} />
+                  ) : (
+                    <LinearGradient
+                      colors={isActivo ? ["#374151", "#1F2937"] : ["#2A2A2A", "#1A1A1A"]}
+                      style={styles.avatar}
+                    >
+                      <Text style={styles.avatarText}>
+                        {(client.nombre || client.invite_email || "?")[0].toUpperCase()}
+                      </Text>
+                    </LinearGradient>
+                  )}
+                </View>
+
+                <View style={styles.clientInfo}>
+                  <Text style={styles.clientName}>
+                    {client.nombre
+                      ? `${client.nombre} ${client.apellido}`
+                      : client.invite_email || "Invitado"}
+                  </Text>
+                  <Text style={styles.clientEmail}>
+                    {client.email || client.invite_email || ""}
+                  </Text>
+                  <View style={styles.metaRow}>
+                    <View style={[styles.statusPill, { backgroundColor: statusBgColor }]}>
+                      <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+                      <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+                    </View>
+                    
+                    {/* Fecha de Membresía */}
+                    {!isPendiente && client.fecha_membresia && (
+                      <View style={styles.membershipBadge}>
+                        <Ionicons name="calendar-outline" size={12} color={Colors.textSecondary} />
+                        <Text style={styles.membershipText}>Vence: {client.fecha_membresia}</Text>
+                      </View>
+                    )}
                   </View>
-                  <Text style={styles.roleText}>{client.role || "paciente"}</Text>
+                </View>
+
+                <View style={styles.clientActions}>
+                  {/* BOTÓN EDITAR CLIENTE (Para clientes que ya tienen cuenta, activos o inactivos) */}
+                  {!isPendiente && (
+                    <Pressable
+                      style={({ pressed }) => [styles.actionIcon, pressed && { opacity: 0.6 }]}
+                      onPress={() => openEditModal(client)}
+                    >
+                      <Ionicons name="pencil" size={18} color={Colors.primary} />
+                    </Pressable>
+                  )}
                 </View>
               </View>
-
-              <View style={styles.clientActions}>
-                <Pressable
-                  style={({ pressed }) => [styles.actionIcon, pressed && { opacity: 0.6 }]}
-                  onPress={() => {}}
-                >
-                  <Ionicons name="chatbubble-outline" size={18} color={Colors.textSecondary} />
-                </Pressable>
-              </View>
-            </View>
-          ))
+            );
+          })
         )}
 
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* --- MODAL INVITAR PACIENTE --- */}
       <Modal
         visible={showModal}
         transparent
@@ -329,6 +415,102 @@ export default function ClientesScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* --- MODAL EDITAR CLIENTE (MEMBRESÍA Y ESTADO) --- */}
+      <Modal
+        visible={showEditModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowEditModal(false)}
+      >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <Pressable style={styles.overlay} onPress={() => { setShowEditModal(false); setShowDatePicker(false); }} />
+          <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>Ajustes de Paciente</Text>
+            <Text style={styles.modalSubtitle}>
+              {selectedClientToEdit?.nombre} {selectedClientToEdit?.apellido}
+            </Text>
+
+            {/* Selector de Estado */}
+            <Text style={styles.label}>Estado de la cuenta</Text>
+            <View style={styles.statusToggleRow}>
+              <Pressable
+                style={[styles.statusToggleBtn, isClientActive && styles.statusToggleBtnActive]}
+                onPress={() => setIsClientActive(true)}
+              >
+                <Ionicons name="checkmark-circle" size={18} color={isClientActive ? Colors.success : Colors.textSecondary} />
+                <Text style={[styles.statusToggleText, isClientActive && { color: Colors.success, fontFamily: "Outfit_700Bold" }]}>Activo</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.statusToggleBtn, !isClientActive && styles.statusToggleBtnInactive]}
+                onPress={() => setIsClientActive(false)}
+              >
+                <Ionicons name="close-circle" size={18} color={!isClientActive ? Colors.error : Colors.textSecondary} />
+                <Text style={[styles.statusToggleText, !isClientActive && { color: Colors.error, fontFamily: "Outfit_700Bold" }]}>Inactivo</Text>
+              </Pressable>
+            </View>
+
+            <Text style={styles.label}>Vencimiento de membresía</Text>
+            
+            {/* Campo que abre el calendario al tocarse */}
+            <Pressable 
+              style={styles.datePickerBtn} 
+              onPress={() => setShowDatePicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={20} color={Colors.primary} />
+              <Text style={styles.datePickerText}>
+                {fechaMembresia ? fechaMembresia.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }) : "Seleccionar fecha"}
+              </Text>
+            </Pressable>
+
+            {/* Componente del Calendario Nativo */}
+            {showDatePicker && (
+              <View style={Platform.OS === 'ios' ? styles.iosDatePickerContainer : undefined}>
+                <DateTimePicker
+                  value={fechaMembresia || new Date()}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                  onChange={handleDateChange}
+                  minimumDate={new Date()}
+                  textColor={Colors.text}
+                  themeVariant="dark" 
+                />
+                {Platform.OS === 'ios' && (
+                  <Pressable style={styles.iosDateDoneBtn} onPress={() => setShowDatePicker(false)}>
+                    <Text style={styles.iosDateDoneText}>Listo</Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.confirmBtn,
+                { marginTop: 24 },
+                editClientMutation.isPending && styles.btnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => editClientMutation.mutate()}
+              disabled={editClientMutation.isPending}
+            >
+              {editClientMutation.isPending ? (
+                <ActivityIndicator color={Colors.primaryText} />
+              ) : (
+                <Text style={styles.confirmBtnText}>Guardar Cambios</Text>
+              )}
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.7 }]}
+              onPress={() => { setShowEditModal(false); setShowDatePicker(false); }}
+            >
+              <Text style={styles.cancelBtnText}>Cancelar</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
     </View>
   );
 }
@@ -450,6 +632,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     marginTop: 6,
+    flexWrap: "wrap",
   },
   statusPill: {
     flexDirection: "row",
@@ -468,26 +651,43 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     fontSize: 12,
   },
+  membershipBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  membershipText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 11,
+    color: Colors.textSecondary,
+  },
   roleText: {
     fontFamily: "Outfit_400Regular",
     fontSize: 12,
     color: Colors.textMuted,
     textTransform: "capitalize",
   },
-  clientActions: { gap: 8 },
+  clientActions: { gap: 8, flexDirection: "row" },
   actionIcon: {
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.primary + "15",
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.primary + "40",
     alignItems: "center",
     justifyContent: "center",
   },
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
+    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
   },
   modal: {
     backgroundColor: Colors.card,
@@ -498,6 +698,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     borderBottomWidth: 0,
+    marginTop: "auto",
   },
   modalHandle: {
     width: 40,
@@ -519,6 +720,12 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginBottom: 20,
     lineHeight: 21,
+  },
+  label: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginBottom: 8,
   },
   errorBox: {
     flexDirection: "row",
@@ -577,4 +784,70 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.textSecondary,
   },
+  // Nuevos estilos para los toggles de estado
+  statusToggleRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 20,
+  },
+  statusToggleBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  statusToggleBtnActive: {
+    backgroundColor: Colors.success + "15",
+    borderColor: Colors.success + "50",
+  },
+  statusToggleBtnInactive: {
+    backgroundColor: Colors.error + "15",
+    borderColor: Colors.error + "50",
+  },
+  statusToggleText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  // Date Picker Estilos
+  datePickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  datePickerText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 16,
+    color: Colors.text,
+  },
+  iosDatePickerContainer: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    marginTop: 8,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  iosDateDoneBtn: {
+    backgroundColor: Colors.primary,
+    padding: 12,
+    alignItems: "center",
+  },
+  iosDateDoneText: {
+    fontFamily: "Outfit_700Bold",
+    color: Colors.primaryText,
+    fontSize: 15,
+  }
 });
