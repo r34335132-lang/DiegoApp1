@@ -67,6 +67,40 @@ export default function ClienteRutinaDetailScreen() {
   const exercises = data?.exercises || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
 
+  // --- LÓGICA PARA AGRUPAR BI-SERIES / TRI-SERIES ---
+  const groupedExercises = React.useMemo(() => {
+    if (!exercises) return [];
+    const groups: any[] = [];
+    let currentGroup: string | null = null;
+    let currentGroupArray: any[] = [];
+
+    exercises.forEach((ex: any) => {
+      if (ex.grupo_serie) {
+        if (currentGroup === ex.grupo_serie) {
+          currentGroupArray.push(ex);
+        } else {
+          if (currentGroupArray.length > 0) {
+            groups.push({ type: 'group', name: currentGroup, items: currentGroupArray });
+          }
+          currentGroup = ex.grupo_serie;
+          currentGroupArray = [ex];
+        }
+      } else {
+        if (currentGroupArray.length > 0) {
+          groups.push({ type: 'group', name: currentGroup, items: currentGroupArray });
+          currentGroupArray = [];
+          currentGroup = null;
+        }
+        groups.push({ type: 'single', item: ex });
+      }
+    });
+    if (currentGroupArray.length > 0) {
+      groups.push({ type: 'group', name: currentGroup, items: currentGroupArray });
+    }
+    return groups;
+  }, [exercises]);
+  // ----------------------------------------------------
+
   const nivelColor = (n: string) => {
     const nivel = n?.toLowerCase();
     if (nivel === "principiante") return Colors.success;
@@ -147,8 +181,8 @@ export default function ClienteRutinaDetailScreen() {
           </View>
         </View>
 
-        {/* Exercises */}
-        {exercises.length === 0 ? (
+        {/* Exercises Agrupados */}
+        {groupedExercises.length === 0 ? (
           <View style={styles.emptyExercises}>
             <Ionicons name="barbell-outline" size={48} color={Colors.textMuted} />
             <Text style={styles.emptyTitle}>Sin ejercicios aún</Text>
@@ -159,9 +193,29 @@ export default function ClienteRutinaDetailScreen() {
         ) : (
           <>
             <Text style={styles.sectionTitle}>Ejercicios</Text>
-            {exercises.map((ex: any, idx: number) => (
-              <ExerciseCard key={ex.id} exercise={ex} index={idx} />
-            ))}
+            {groupedExercises.map((group, groupIdx) => {
+              // Si es un ejercicio normal sin grupo
+              if (group.type === "single") {
+                return <ExerciseCard key={group.item.id} exercise={group.item} index={group.item.orden} />;
+              }
+
+              // Si es un grupo (Bi-serie, Tri-serie)
+              return (
+                <View key={`group-${group.name}-${groupIdx}`} style={styles.groupWrapper}>
+                  <View style={styles.groupHeader}>
+                    <Ionicons name="link" size={18} color={Colors.accentOrange} />
+                    <Text style={styles.groupTitle}>
+                      {group.items.length === 2 ? "BI-SERIE" : group.items.length === 3 ? "TRI-SERIE" : "CIRCUITO"} (Grupo {group.name})
+                    </Text>
+                  </View>
+                  <View style={styles.groupBorder}>
+                    {group.items.map((ex: any) => (
+                      <ExerciseCard key={ex.id} exercise={ex} index={ex.orden} />
+                    ))}
+                  </View>
+                </View>
+              );
+            })}
           </>
         )}
 
@@ -493,5 +547,31 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 200,
     borderRadius: 12,
+  },
+  // --- NUEVOS ESTILOS PARA LOS GRUPOS (BI-SERIES) ---
+  groupWrapper: {
+    marginBottom: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: 2,
+    borderWidth: 2,
+    borderColor: Colors.accentOrange + "44",
+  },
+  groupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  groupTitle: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 15,
+    color: Colors.accentOrange,
+  },
+  groupBorder: {
+    padding: 8,
+    paddingTop: 0,
+    gap: 8,
   },
 });

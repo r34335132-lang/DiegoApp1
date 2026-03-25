@@ -24,6 +24,7 @@ interface Exercise {
   imagen_url: string | null;
   video_url: string | null;
   orden?: number;
+  grupo_serie?: string | null; // <-- Agregado para soportar bi-series
 }
 
 interface Routine {
@@ -34,7 +35,7 @@ interface Routine {
   trainer_nombre: string | null;
   trainer_apellido: string | null;
   trainer_id?: string;
-  ejercicios?: Exercise[]; // <-- Agregamos los ejercicios aquí
+  ejercicios?: Exercise[]; 
 }
 
 type WorkoutPhase = "select" | "working" | "resting" | "complete";
@@ -60,7 +61,7 @@ export default function EntrenarScreen() {
   const [selectedRoutine, setSelectedRoutine] = useState<Routine | null>(null);
   const [exercises, setExercises] = useState<Exercise[]>([]);
 
-  const [currentExIdx, setCurrentExIdx] = useState(0);
+  const [currentExIdx, setCurrentExIdx] = useState(0); // Ahora este índice controlará el GRUPO actual
   const [currentSet, setCurrentSet] = useState(1);
   const [setsCompleted, setSetsCompleted] = useState(0);
   const [exercisesCompleted, setExercisesCompleted] = useState(0);
@@ -88,6 +89,40 @@ export default function EntrenarScreen() {
   const currentSetRef = useRef(1);
   const exercisesCompletedRef = useRef(0);
   const setsCompletedRef = useRef(0);
+  const groupedExercisesRef = useRef<any[]>([]);
+
+  // --- LÓGICA DE AGRUPACIÓN EN TIEMPO REAL ---
+  const groupedExercises = React.useMemo(() => {
+    if (!exercises) return [];
+    const groups: any[] = [];
+    let currentGroup: string | null = null;
+    let currentGroupArray: Exercise[] = [];
+
+    exercises.forEach((ex) => {
+      if (ex.grupo_serie) {
+        if (currentGroup === ex.grupo_serie) {
+          currentGroupArray.push(ex);
+        } else {
+          if (currentGroupArray.length > 0) {
+            groups.push({ type: 'group', name: currentGroup, items: currentGroupArray });
+          }
+          currentGroup = ex.grupo_serie;
+          currentGroupArray = [ex];
+        }
+      } else {
+        if (currentGroupArray.length > 0) {
+          groups.push({ type: 'group', name: currentGroup, items: currentGroupArray });
+          currentGroupArray = [];
+          currentGroup = null;
+        }
+        groups.push({ type: 'single', items: [ex] });
+      }
+    });
+    if (currentGroupArray.length > 0) {
+      groups.push({ type: 'group', name: currentGroup, items: currentGroupArray });
+    }
+    return groups;
+  }, [exercises]);
 
   useEffect(() => { totalSecondsRef.current = totalSeconds; }, [totalSeconds]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
@@ -98,8 +133,8 @@ export default function EntrenarScreen() {
   useEffect(() => { exercisesCompletedRef.current = exercisesCompleted; }, [exercisesCompleted]);
   useEffect(() => { setsCompletedRef.current = setsCompleted; }, [setsCompleted]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { groupedExercisesRef.current = groupedExercises; }, [groupedExercises]);
 
-  // 1. CARGAR RUTINAS Y EJERCICIOS JUNTOS (Para que funcione Offline)
   const { data: routinesData } = useQuery({
     queryKey: ["client_routines_list_offline", user?.id],
     enabled: !!user?.id,
@@ -110,7 +145,7 @@ export default function EntrenarScreen() {
           *,
           perfiles:entrenador_id (nombre, apellido),
           ejercicios (*) 
-        `) // <-- La magia está aquí: Traemos los ejercicios anidados
+        `) 
         .eq("cliente_id", user?.id)
         .order("created_at", { ascending: false });
 
@@ -126,10 +161,9 @@ export default function EntrenarScreen() {
 
       return { routines: formatted };
     },
-    staleTime: 1000 * 60 * 60, // Mantenemos la caché viva por 1 hora
+    staleTime: 1000 * 60 * 60,
   });
 
-  // 2. INICIAR SESIÓN DE ENTRENAMIENTO (Tolerante a fallos offline)
   const startSessionMutation = useMutation({
     mutationFn: async (data: { routineId: string; totalExercises: number }) => {
       const { data: sessionData, error } = await supabase
@@ -150,7 +184,6 @@ export default function EntrenarScreen() {
     onError: (err) => console.log("[Modo Offline] No se pudo crear la sesión en DB, pero el cronómetro seguirá."),
   });
 
-  // 3. FINALIZAR SESIÓN DE ENTRENAMIENTO
   const finishSessionMutation = useMutation({
     mutationFn: async (data: { id: string; durationSeconds: number; exercisesCompleted: number }) => {
       const { error } = await supabase
@@ -167,7 +200,6 @@ export default function EntrenarScreen() {
     onError: (err) => console.log("[Modo Offline] El progreso se quedará en local."),
   });
 
-  // 4. ENVIAR RESUMEN AL ENTRENADOR VÍA CHAT
   const sendSummaryMutation = useMutation({
     mutationFn: async (data: { receiverId: string; contenido: string }) => {
       const { error } = await supabase
@@ -259,8 +291,6 @@ export default function EntrenarScreen() {
 
   const loadRoutineDetail = async (routine: Routine) => {
     try {
-      // YA NO HACEMOS FETCH A LA BASE DE DATOS AQUÍ.
-      // Usamos los ejercicios que ya vienen anidados desde la caché.
       const exList = routine.ejercicios || [];
 
       if (exList.length === 0) {
@@ -283,8 +313,6 @@ export default function EntrenarScreen() {
       startTotalTimer();
       startSetTimer();
 
-      // Intentamos iniciar la sesión en DB. Si falla (por falta de internet), 
-      // generamos un ID falso para que la app no crashee y permita seguir.
       try {
         const session = await startSessionMutation.mutateAsync({
           routineId: routine.id,
@@ -292,7 +320,7 @@ export default function EntrenarScreen() {
         });
         setSessionId(session.id || null);
       } catch (e) {
-        setSessionId("offline_session_" + Date.now()); // Fallback offline
+        setSessionId("offline_session_" + Date.now()); 
       }
       
     } catch {
@@ -310,7 +338,6 @@ export default function EntrenarScreen() {
     const exList = exercisesRef.current;
     const selRoutine = selectedRoutineRef.current;
 
-    // Solo intentamos actualizar en DB si el ID no es el que generamos offline
     if (sid && !sid.startsWith("offline_")) {
       finishSessionMutation.mutate({
         id: sid,
@@ -359,18 +386,23 @@ export default function EntrenarScreen() {
   }, [stopAllTimers, routinesData, finishSessionMutation, sendSummaryMutation]);
 
   const handleFinishSet = useCallback(() => {
-    const exIdx = currentExIdxRef.current;
+    const gIdx = currentExIdxRef.current;
     const set = currentSetRef.current;
     const exCompleted = exercisesCompletedRef.current;
     const setsCompl = setsCompletedRef.current;
-    const exList = exercisesRef.current;
+    const groups = groupedExercisesRef.current;
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     if (setTimerRef.current) { clearInterval(setTimerRef.current); setTimerRef.current = null; }
 
-    const ex = exList[exIdx];
-    const totalSets = ex?.series || 1;
-    const restSecs = parseRestSeconds(ex?.descanso);
+    const group = groups[gIdx];
+    if (!group) return;
+
+    // Tomamos la cantidad de series y el tiempo de descanso del último ejercicio del grupo
+    const totalSets = group.items[0]?.series || 1;
+    const lastExInGroup = group.items[group.items.length - 1];
+    const restSecs = parseRestSeconds(lastExInGroup?.descanso);
+    
     const newSetsCompleted = setsCompl + 1;
     setSetsCompleted(newSetsCompleted);
 
@@ -379,14 +411,15 @@ export default function EntrenarScreen() {
       setPhase("resting");
       startRestTimer(restSecs);
     } else {
-      const newExCompleted = exCompleted + 1;
+      // Al terminar las series, sumamos todos los ejercicios del bloque
+      const newExCompleted = exCompleted + group.items.length; 
       setExercisesCompleted(newExCompleted);
 
-      if (exIdx >= exList.length - 1) {
+      if (gIdx >= groups.length - 1) {
         finishWorkout(newExCompleted, newSetsCompleted);
       } else {
         restTypeRef.current = "exercise";
-        setCurrentExIdx(exIdx + 1);
+        setCurrentExIdx(gIdx + 1);
         setCurrentSet(1);
         setPhase("resting");
         startRestTimer(restSecs);
@@ -479,12 +512,14 @@ export default function EntrenarScreen() {
   }
 
   if (phase === "working") {
-    const ex = exercises[currentExIdx];
-    if (!ex) return null;
-    const totalSets = ex.series || 1;
-    const exerciseProgress = currentExIdx / exercises.length;
+    const group = groupedExercises[currentExIdx];
+    if (!group) return null;
+    
+    const totalSets = group.items[0]?.series || 1;
+    const groupWeight = group.items.length / exercises.length;
+    const exerciseProgress = exercisesCompleted / exercises.length;
     const setProgress = (currentSet - 1) / totalSets;
-    const overallProgress = (currentExIdx + setProgress) / exercises.length;
+    const overallProgress = exerciseProgress + (setProgress * groupWeight);
 
     return (
       <View style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -501,7 +536,7 @@ export default function EntrenarScreen() {
           <View style={styles.workoutHeaderCenter}>
             <Text style={styles.workoutTitle} numberOfLines={1}>{selectedRoutine?.nombre}</Text>
             <Text style={styles.workoutProgress}>
-              Ejercicio {currentExIdx + 1}/{exercises.length} · Serie {currentSet}/{totalSets}
+              Bloque {currentExIdx + 1}/{groupedExercises.length} · Serie {currentSet}/{totalSets}
             </Text>
           </View>
 
@@ -532,6 +567,8 @@ export default function EntrenarScreen() {
 
         <ScrollView contentContainerStyle={styles.workoutContent} showsVerticalScrollIndicator={false}>
           <View style={styles.exerciseCard}>
+            
+            {/* --- CABECERA COMPARTIDA (Para Single o Grupo) --- */}
             <View style={styles.phaseRow}>
               <View style={styles.phaseBadge}>
                 <Ionicons name="flame" size={12} color={Colors.primaryText} />
@@ -557,46 +594,62 @@ export default function EntrenarScreen() {
               <Text style={styles.exerciseTimerLabel}>tiempo serie</Text>
             </View>
 
-            <Text style={styles.exerciseName}>{ex.nombre}</Text>
-            {ex.descripcion ? (
-              <Text style={styles.exerciseDesc}>{ex.descripcion}</Text>
-            ) : null}
+            {/* --- INSIGNIA DE BI-SERIE / TRI-SERIE --- */}
+            {group.type === "group" && (
+              <View style={styles.groupBadgeInline}>
+                <Ionicons name="link" size={16} color={Colors.accentOrange} />
+                <Text style={styles.groupBadgeInlineText}>
+                  {group.items.length === 2 ? "BI-SERIE" : "TRI-SERIE"} (GRUPO {group.name})
+                </Text>
+              </View>
+            )}
 
-            <View style={styles.exerciseStats}>
-              <View style={styles.exerciseStat}>
-                <Text style={styles.exerciseStatVal}>{ex.series}</Text>
-                <Text style={styles.exerciseStatLabel}>Series</Text>
-              </View>
-              <View style={styles.exerciseStatDivider} />
-              <View style={styles.exerciseStat}>
-                <Text style={styles.exerciseStatVal}>{ex.repeticiones}</Text>
-                <Text style={styles.exerciseStatLabel}>Reps</Text>
-              </View>
-              {ex.peso ? (
-                <>
+            {/* --- LISTADO DE EJERCICIOS DEL BLOQUE --- */}
+            {group.items.map((ex: any, index: number) => (
+              <View key={ex.id} style={index > 0 ? styles.groupDividerTop : null}>
+                <Text style={styles.exerciseName}>{ex.nombre}</Text>
+                {ex.descripcion ? (
+                  <Text style={styles.exerciseDesc}>{ex.descripcion}</Text>
+                ) : null}
+
+                <View style={styles.exerciseStats}>
+                  <View style={styles.exerciseStat}>
+                    <Text style={styles.exerciseStatVal}>{ex.series}</Text>
+                    <Text style={styles.exerciseStatLabel}>Series</Text>
+                  </View>
                   <View style={styles.exerciseStatDivider} />
                   <View style={styles.exerciseStat}>
-                    <Text style={styles.exerciseStatVal}>{ex.peso}</Text>
-                    <Text style={styles.exerciseStatLabel}>Peso</Text>
+                    <Text style={styles.exerciseStatVal}>{ex.repeticiones}</Text>
+                    <Text style={styles.exerciseStatLabel}>Reps</Text>
                   </View>
-                </>
-              ) : null}
-              {ex.descanso ? (
-                <>
-                  <View style={styles.exerciseStatDivider} />
-                  <View style={styles.exerciseStat}>
-                    <Text style={styles.exerciseStatVal}>{ex.descanso}</Text>
-                    <Text style={styles.exerciseStatLabel}>Descanso</Text>
-                  </View>
-                </>
-              ) : null}
-            </View>
+                  {ex.peso ? (
+                    <>
+                      <View style={styles.exerciseStatDivider} />
+                      <View style={styles.exerciseStat}>
+                        <Text style={styles.exerciseStatVal}>{ex.peso}</Text>
+                        <Text style={styles.exerciseStatLabel}>Peso</Text>
+                      </View>
+                    </>
+                  ) : null}
+                  {ex.descanso ? (
+                    <>
+                      <View style={styles.exerciseStatDivider} />
+                      <View style={styles.exerciseStat}>
+                        <Text style={styles.exerciseStatVal}>{ex.descanso}</Text>
+                        <Text style={styles.exerciseStatLabel}>Descanso</Text>
+                      </View>
+                    </>
+                  ) : null}
+                </View>
 
-            {ex.video_url && !isPaused ? (
-              <View style={styles.videoInlineWrapper}>
-                <InlineVideo uri={ex.video_url} />
+                {ex.video_url && !isPaused ? (
+                  <View style={styles.videoInlineWrapper}>
+                    <InlineVideo uri={ex.video_url} />
+                  </View>
+                ) : null}
               </View>
-            ) : null}
+            ))}
+
           </View>
 
           <Pressable
@@ -608,8 +661,8 @@ export default function EntrenarScreen() {
             <Text style={styles.finishSetBtnText}>Finalizar serie</Text>
           </Pressable>
 
-          {currentExIdx >= exercises.length - 1 && currentSet >= totalSets && (
-            <Text style={styles.lastSetHint}>Última serie del último ejercicio</Text>
+          {currentExIdx >= groupedExercises.length - 1 && currentSet >= totalSets && (
+            <Text style={styles.lastSetHint}>Última serie del último bloque</Text>
           )}
         </ScrollView>
       </View>
@@ -618,9 +671,10 @@ export default function EntrenarScreen() {
 
   if (phase === "resting") {
     const isRestBetweenSets = restTypeRef.current === "set";
-    const nextEx = exercises[currentExIdx];
+    const nextGroup = groupedExercises[currentExIdx];
     const nextSetNum = isRestBetweenSets ? currentSet + 1 : 1;
-    const nextExName = isRestBetweenSets ? nextEx?.nombre : exercises[currentExIdx]?.nombre;
+    // Si es un grupo, junta los nombres (ej: "Sentadilla + Prensa")
+    const nextExName = nextGroup?.items.map((e: any) => e.nombre).join(" + ");
 
     return (
       <View style={{ flex: 1, backgroundColor: Colors.background, alignItems: "center", justifyContent: "center" }}>
@@ -645,13 +699,13 @@ export default function EntrenarScreen() {
 
         <View style={styles.nextUpBlock}>
           <Text style={styles.nextUpLabel}>
-            {isRestBetweenSets ? `Serie ${nextSetNum}` : "Siguiente ejercicio"}
+            {isRestBetweenSets ? `Serie ${nextSetNum}` : "Siguiente bloque"}
           </Text>
           <Text style={styles.nextExerciseName}>{nextExName || ""}</Text>
-          {isRestBetweenSets && nextEx && (
+          
+          {isRestBetweenSets && nextGroup && (
             <Text style={styles.nextSetSub}>
-              Serie {nextSetNum} de {nextEx.series} · {nextEx.repeticiones} reps
-              {nextEx.peso ? ` · ${nextEx.peso}` : ""}
+              Serie {nextSetNum} de {nextGroup.items[0]?.series}
             </Text>
           )}
         </View>
@@ -725,7 +779,6 @@ export default function EntrenarScreen() {
   return null;
 }
 
-// ... LOS ESTILOS SE MANTIENEN EXACTAMENTE IGUAL A TU CÓDIGO ANTERIOR ...
 const styles = StyleSheet.create({
   headerContainer: {
     paddingHorizontal: 20,
@@ -968,6 +1021,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary + "40",
     alignItems: "center",
     justifyContent: "center",
+    marginVertical: 8,
   },
   exerciseTimerText: {
     fontFamily: "Outfit_700Bold",
@@ -981,6 +1035,30 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 2,
   },
+  
+  // --- NUEVOS ESTILOS PARA LOS GRUPOS EN EJECUCIÓN ---
+  groupBadgeInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.accentOrange + '15',
+    paddingVertical: 8,
+    borderRadius: 12,
+    marginBottom: 6,
+  },
+  groupBadgeInlineText: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 12,
+    color: Colors.accentOrange,
+  },
+  groupDividerTop: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    paddingTop: 20,
+    marginTop: 8,
+  },
+  
   exerciseName: {
     fontFamily: "Outfit_700Bold",
     fontSize: 22,
@@ -992,6 +1070,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textSecondary,
     lineHeight: 20,
+    marginTop: 4,
   },
   exerciseStats: {
     flexDirection: "row",
@@ -999,6 +1078,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderRadius: 16,
     padding: 16,
+    marginTop: 12,
   },
   exerciseStat: {
     flex: 1,
@@ -1025,6 +1105,7 @@ const styles = StyleSheet.create({
   videoInlineWrapper: {
     borderRadius: 12,
     overflow: "hidden",
+    marginTop: 12,
   },
   finishSetBtn: {
     flexDirection: "row",

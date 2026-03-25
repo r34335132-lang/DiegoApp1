@@ -21,23 +21,25 @@ export default function MisRutinasScreen() {
     queryKey: ["client_routines_list", user?.id],
     enabled: !!user?.id,
     queryFn: async () => {
-      // Buscamos las rutinas asignadas a este cliente específico
+      // Buscamos las rutinas y le pedimos a Supabase que también traiga los ID de los ejercicios para contarlos
       const { data: routinesData, error } = await supabase
         .from("rutinas")
         .select(`
           *,
-          perfiles:entrenador_id (nombre, apellido)
+          perfiles:entrenador_id (nombre, apellido),
+          ejercicios (id)
         `)
         .eq("cliente_id", user?.id)
         .order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);
 
-      // Formateamos para que la interfaz muestre el nombre del entrenador
+      // Formateamos para que la interfaz muestre el nombre del entrenador y la cantidad de ejercicios
       const formatted = (routinesData || []).map((r: any) => ({
         ...r,
         trainer_nombre: r.perfiles?.nombre,
         trainer_apellido: r.perfiles?.apellido,
+        exercise_count: r.ejercicios?.length || 0, // <-- Nueva mejora: Conteo de ejercicios
       }));
 
       return { routines: formatted };
@@ -115,14 +117,20 @@ export default function MisRutinasScreen() {
                 <Text style={styles.routineDesc} numberOfLines={2}>{item.descripcion}</Text>
               ) : null}
 
-              {(item.trainer_nombre || item.trainer_apellido) && (
-                <View style={styles.trainerRow}>
-                  <Ionicons name="person" size={14} color={Colors.textMuted} />
-                  <Text style={styles.trainerText}>
-                    Coach: {item.trainer_nombre} {item.trainer_apellido}
-                  </Text>
+              <View style={styles.metaContainer}>
+                {(item.trainer_nombre || item.trainer_apellido) && (
+                  <View style={styles.metaItem}>
+                    <Ionicons name="person" size={14} color={Colors.textMuted} />
+                    <Text style={styles.metaText}>
+                      Coach: {item.trainer_nombre} {item.trainer_apellido}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.metaItem}>
+                  <Ionicons name="list" size={14} color={Colors.textMuted} />
+                  <Text style={styles.metaText}>{item.exercise_count} ejercicios</Text>
                 </View>
-              )}
+              </View>
 
               <View style={styles.viewBtn}>
                 <Text style={styles.viewBtnText}>Ver ejercicios</Text>
@@ -226,13 +234,18 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     lineHeight: 20,
   },
-  trainerRow: {
+  metaContainer: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 14,
+    flexWrap: "wrap",
+  },
+  metaItem: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginBottom: 14,
   },
-  trainerText: {
+  metaText: {
     fontFamily: "Outfit_400Regular",
     fontSize: 13,
     color: Colors.textMuted,

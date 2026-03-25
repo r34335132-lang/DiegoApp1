@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, Modal, ActivityIndicator, KeyboardAvoidingView
+  Platform, Modal, ActivityIndicator, KeyboardAvoidingView, Alert
 } from "react-native";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,23 +15,22 @@ import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/auth";
 import { supabase } from "@/lib/supabase";
 
+// --- TIPOS PARA EL FORMULARIO DINÁMICO ---
+type ExForm = { nombre: string; descripcion: string; series: string; reps: string; peso: string; descanso: string; imagenUrl: string; videoUrl: string; };
+const defaultEx: ExForm = { nombre: "", descripcion: "", series: "3", reps: "10", peso: "", descanso: "60s", imagenUrl: "", videoUrl: "" };
+
 export default function RutinaDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
   const { user } = useAuth();
   
-  // Modal Agregar Ejercicio
+  // --- ESTADOS DEL MODAL DINÁMICO ---
   const [showModal, setShowModal] = useState(false);
-  const [nombre, setNombre] = useState("");
-  const [descripcion, setDescripcion] = useState("");
-  const [series, setSeries] = useState("3");
-  const [reps, setReps] = useState("10");
-  const [peso, setPeso] = useState("");
-  const [descanso, setDescanso] = useState("60s");
-  const [imagenUrl, setImagenUrl] = useState("");
-  const [videoUrl, setVideoUrl] = useState("");
   const [error, setError] = useState("");
+  const [tipoEjecucion, setTipoEjecucion] = useState<"individual" | "biserie" | "triserie">("individual");
+  const [exForms, setExForms] = useState<ExForm[]>([{ ...defaultEx }]);
+  const [uploadingIdx, setUploadingIdx] = useState<{ index: number; type: "image" | "video" } | null>(null);
 
   // Modal Editar Rutina
   const [showEditModal, setShowEditModal] = useState(false);
@@ -71,7 +70,7 @@ export default function RutinaDetailScreen() {
     },
   });
 
-  // 2. OBTENER PACIENTES DEL ENTRENADOR (Para el selector de asignar rutina)
+  // 2. OBTENER PACIENTES DEL ENTRENADOR
   const { data: misClientes } = useQuery({
     queryKey: ["my_clients_for_assignment", user?.id],
     enabled: !!user?.id,
@@ -87,7 +86,6 @@ export default function RutinaDetailScreen() {
     }
   });
 
-  // Precargar datos al abrir modal de edición de rutina
   useEffect(() => {
     if (data?.routine && showEditModal) {
       setEditNombre(data.routine.nombre || "");
@@ -97,7 +95,6 @@ export default function RutinaDetailScreen() {
     }
   }, [showEditModal, data?.routine]);
 
-  // MUTACIÓN PARA EDITAR RUTINA
   const editRoutineMutation = useMutation({
     mutationFn: async () => {
       const { error } = await supabase
@@ -122,24 +119,78 @@ export default function RutinaDetailScreen() {
     onError: (err: any) => Alert.alert("Error", err.message || "No se pudo actualizar la rutina"),
   });
 
-  // MUTACIÓN AGREGAR EJERCICIO
+  // --- LÓGICA DEL FORMULARIO DINÁMICO ---
+  const handleTipoChange = (tipo: "individual" | "biserie" | "triserie") => {
+    setTipoEjecucion(tipo);
+    if (tipo === "individual") {
+      setExForms([exForms[0]]);
+    } else if (tipo === "biserie") {
+      setExForms([exForms[0], exForms[1] || { ...defaultEx }]);
+    } else if (tipo === "triserie") {
+      setExForms([exForms[0], exForms[1] || { ...defaultEx }, exForms[2] || { ...defaultEx }]);
+    }
+  };
+
+  const updateForm = (index: number, field: keyof ExForm, value: string) => {
+    const newForms = [...exForms];
+    newForms[index][field] = value;
+    setExForms(newForms);
+  };
+
+  const handlePickImage = async (index: number) => {
+    setUploadingIdx({ index, type: "image" });
+    imgUpload.reset();
+    const result = await imgUpload.pickAndUpload("images");
+    if (result) updateForm(index, "imagenUrl", result.url);
+    setUploadingIdx(null);
+  };
+
+  const handlePickVideo = async (index: number) => {
+    setUploadingIdx({ index, type: "video" });
+    vidUpload.reset();
+    const result = await vidUpload.pickAndUpload("videos");
+    if (result) updateForm(index, "videoUrl", result.url);
+    setUploadingIdx(null);
+  };
+
+  const resetForm = () => {
+    setTipoEjecucion("individual");
+    setExForms([{ ...defaultEx }]);
+    setError("");
+    imgUpload.reset();
+    vidUpload.reset();
+    setUploadingIdx(null);
+  };
+
   const addExMutation = useMutation({
     mutationFn: async () => {
-      const { error: insertError } = await supabase
-        .from("ejercicios")
-        .insert([{
-          rutina_id: id,
-          nombre: nombre.trim(),
-          descripcion: descripcion.trim() || null,
-          series: Number(series) || 3,
-          repeticiones: reps,
-          peso: peso || null,
-          descanso,
-          imagen_url: imagenUrl || null,
-          video_url: videoUrl || null,
-          orden: data?.exercises?.length || 0,
-        }]);
+      const isGroup = tipoEjecucion !== "individual";
+      let assignedGroup = null;
 
+      if (isGroup) {
+        // Buscamos cuántos grupos existen para asignarle uno nuevo automáticamente (Ej: G1, G2)
+        const existingGroups = new Set((data?.exercises || []).map((e: any) => e.grupo_serie).filter(Boolean));
+        assignedGroup = `G${existingGroups.size + 1}`;
+      }
+
+      const baseOrder = data?.exercises?.length || 0;
+      
+      // Creamos el arreglo con los ejercicios que vamos a insertar al mismo tiempo
+      const inserts = exForms.map((form, idx) => ({
+        rutina_id: id,
+        nombre: form.nombre.trim(),
+        descripcion: form.descripcion.trim() || null,
+        series: Number(form.series) || 3,
+        repeticiones: form.reps,
+        peso: form.peso || null,
+        descanso: form.descanso,
+        grupo_serie: assignedGroup, 
+        imagen_url: form.imagenUrl || null,
+        video_url: form.videoUrl || null,
+        orden: baseOrder + idx,
+      }));
+
+      const { error: insertError } = await supabase.from("ejercicios").insert(inserts);
       if (insertError) throw new Error(insertError.message);
     },
     onSuccess: () => {
@@ -151,7 +202,6 @@ export default function RutinaDetailScreen() {
     onError: (err: any) => setError(err.message || "Error al agregar"),
   });
 
-  // MUTACIÓN ELIMINAR EJERCICIO
   const deleteExMutation = useMutation({
     mutationFn: async (exId: string) => {
       const { error } = await supabase
@@ -167,29 +217,10 @@ export default function RutinaDetailScreen() {
     },
   });
 
-  const resetForm = () => {
-    setNombre(""); setDescripcion(""); setSeries("3"); setReps("10");
-    setPeso(""); setDescanso("60s"); setImagenUrl(""); setVideoUrl(""); setError("");
-    imgUpload.reset();
-    vidUpload.reset();
-  };
-
-  const handlePickImage = async () => {
-    imgUpload.reset();
-    const result = await imgUpload.pickAndUpload("images");
-    if (result) setImagenUrl(result.url);
-  };
-
-  const handlePickVideo = async () => {
-    vidUpload.reset();
-    const result = await vidUpload.pickAndUpload("videos");
-    if (result) setVideoUrl(result.url);
-  };
-
   const routine = data?.routine;
   const exercises = data?.exercises || [];
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
-  const isUploading = imgUpload.uploading || vidUpload.uploading;
+  const isUploadingAny = imgUpload.uploading || vidUpload.uploading;
 
   if (!routine) {
     return (
@@ -240,7 +271,6 @@ export default function RutinaDetailScreen() {
             <Text style={styles.exerciseCount}>{exercises.length} ejercicios</Text>
           </View>
           
-          {/* Mostramos a quién está asignada la rutina */}
           <View style={styles.assignedBox}>
             <Ionicons name="person" size={16} color={Colors.textSecondary} />
             <Text style={styles.assignedText}>
@@ -268,8 +298,17 @@ export default function RutinaDetailScreen() {
                   <Text style={styles.exNumText}>{idx + 1}</Text>
                 </View>
                 <Text style={styles.exName}>{ex.nombre}</Text>
+                
+                {ex.grupo_serie && (
+                  <View style={{ backgroundColor: Colors.accentOrange + '22', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 4 }}>
+                      <Text style={{ color: Colors.accentOrange, fontSize: 10, fontFamily: "Outfit_700Bold" }}>
+                        EN GRUPO ({ex.grupo_serie})
+                      </Text>
+                  </View>
+                )}
+
                 <Pressable
-                  style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.6 }]}
+                  style={({ pressed }) => [styles.deleteBtn, { marginLeft: 'auto' }, pressed && { opacity: 0.6 }]}
                   onPress={() => deleteExMutation.mutate(ex.id)}
                 >
                   <Ionicons name="trash-outline" size={16} color={Colors.error} />
@@ -326,7 +365,7 @@ export default function RutinaDetailScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* --- MODAL PARA EDITAR LA RUTINA (REASIGNAR) --- */}
+      {/* --- MODAL PARA EDITAR LA RUTINA --- */}
       <Modal visible={showEditModal} transparent animationType="slide" onRequestClose={() => setShowEditModal(false)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <Pressable style={styles.overlay} onPress={() => setShowEditModal(false)} />
@@ -335,7 +374,6 @@ export default function RutinaDetailScreen() {
             <Text style={styles.modalTitle}>Editar Rutina</Text>
 
             <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              
               <Text style={styles.label}>Nombre de la rutina</Text>
               <View style={styles.inputContainer}>
                 <TextInput
@@ -418,7 +456,7 @@ export default function RutinaDetailScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* --- MODAL PARA AGREGAR EJERCICIO --- */}
+      {/* --- MODAL PARA AGREGAR EJERCICIOS (DINÁMICO) --- */}
       <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => { setShowModal(false); resetForm(); }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <Pressable style={styles.overlay} onPress={() => { setShowModal(false); resetForm(); }} />
@@ -427,6 +465,36 @@ export default function RutinaDetailScreen() {
             <Text style={styles.modalTitle}>Nuevo Ejercicio</Text>
 
             <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              
+              {/* SELECTOR DE TIPO DE EJECUCIÓN (Arriba de todo) */}
+              <Text style={styles.label}>Tipo de Ejecución</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
+                <Pressable
+                  style={[styles.clientChip, tipoEjecucion === "individual" && styles.clientChipActive]}
+                  onPress={() => handleTipoChange("individual")}
+                >
+                  <Text style={[styles.clientChipText, tipoEjecucion === "individual" && styles.clientChipTextActive]}>
+                    Individual
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.clientChip, tipoEjecucion === "biserie" && styles.clientChipActive]}
+                  onPress={() => handleTipoChange("biserie")}
+                >
+                  <Text style={[styles.clientChipText, tipoEjecucion === "biserie" && styles.clientChipTextActive]}>
+                    Bi-serie (2 Ejercicios)
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.clientChip, tipoEjecucion === "triserie" && styles.clientChipActive]}
+                  onPress={() => handleTipoChange("triserie")}
+                >
+                  <Text style={[styles.clientChipText, tipoEjecucion === "triserie" && styles.clientChipTextActive]}>
+                    Tri-serie (3 Ejercicios)
+                  </Text>
+                </Pressable>
+              </ScrollView>
+
               {error ? (
                 <View style={styles.errorBox}>
                   <Ionicons name="alert-circle" size={16} color={Colors.error} />
@@ -434,166 +502,168 @@ export default function RutinaDetailScreen() {
                 </View>
               ) : null}
 
-              <Text style={styles.label}>Nombre del ejercicio *</Text>
-              <View style={styles.inputContainer}>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="Ej: Sentadilla con barra"
-                  placeholderTextColor={Colors.textMuted}
-                  value={nombre}
-                  onChangeText={(t) => { setNombre(t); setError(""); }}
-                />
-              </View>
+              {/* RENDERIZAMOS LOS FORMULARIOS DINÁMICAMENTE */}
+              {exForms.map((form, index) => (
+                <View key={index} style={tipoEjecucion !== "individual" ? styles.formBlock : null}>
+                  
+                  {tipoEjecucion !== "individual" && (
+                    <Text style={styles.blockTitle}>Ejercicio {index + 1}</Text>
+                  )}
 
-              <Text style={styles.label}>Descripción (opcional)</Text>
-              <View style={[styles.inputContainer, { alignItems: "flex-start" }]}>
-                <TextInput
-                  style={[styles.modalInput, { height: 60, textAlignVertical: "top" }]}
-                  placeholder="Técnica y consejos..."
-                  placeholderTextColor={Colors.textMuted}
-                  value={descripcion}
-                  onChangeText={setDescripcion}
-                  multiline
-                />
-              </View>
-
-              <View style={styles.statsRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Series</Text>
+                  <Text style={styles.label}>Nombre del ejercicio *</Text>
                   <View style={styles.inputContainer}>
                     <TextInput
                       style={styles.modalInput}
-                      placeholder="3"
+                      placeholder="Ej: Sentadilla con barra"
                       placeholderTextColor={Colors.textMuted}
-                      value={series}
-                      onChangeText={setSeries}
-                      keyboardType="number-pad"
+                      value={form.nombre}
+                      onChangeText={(t) => { updateForm(index, "nombre", t); setError(""); }}
                     />
                   </View>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Reps</Text>
+
+                  <Text style={styles.label}>Descripción (opcional)</Text>
+                  <View style={[styles.inputContainer, { alignItems: "flex-start" }]}>
+                    <TextInput
+                      style={[styles.modalInput, { height: 60, textAlignVertical: "top" }]}
+                      placeholder="Técnica y consejos..."
+                      placeholderTextColor={Colors.textMuted}
+                      value={form.descripcion}
+                      onChangeText={(t) => updateForm(index, "descripcion", t)}
+                      multiline
+                    />
+                  </View>
+
+                  <View style={styles.statsRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>Series</Text>
+                      <View style={styles.inputContainer}>
+                        <TextInput
+                          style={styles.modalInput}
+                          placeholder="3"
+                          placeholderTextColor={Colors.textMuted}
+                          value={form.series}
+                          onChangeText={(t) => updateForm(index, "series", t)}
+                          keyboardType="number-pad"
+                        />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>Reps</Text>
+                      <View style={styles.inputContainer}>
+                        <TextInput
+                          style={styles.modalInput}
+                          placeholder="10"
+                          placeholderTextColor={Colors.textMuted}
+                          value={form.reps}
+                          onChangeText={(t) => updateForm(index, "reps", t)}
+                        />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>Peso</Text>
+                      <View style={styles.inputContainer}>
+                        <TextInput
+                          style={styles.modalInput}
+                          placeholder="60 kg"
+                          placeholderTextColor={Colors.textMuted}
+                          value={form.peso}
+                          onChangeText={(t) => updateForm(index, "peso", t)}
+                        />
+                      </View>
+                    </View>
+                  </View>
+
+                  <Text style={styles.label}>Descanso</Text>
                   <View style={styles.inputContainer}>
                     <TextInput
                       style={styles.modalInput}
-                      placeholder="10"
+                      placeholder="60s"
                       placeholderTextColor={Colors.textMuted}
-                      value={reps}
-                      onChangeText={setReps}
+                      value={form.descanso}
+                      onChangeText={(t) => updateForm(index, "descanso", t)}
                     />
                   </View>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Peso</Text>
-                  <View style={styles.inputContainer}>
-                    <TextInput
-                      style={styles.modalInput}
-                      placeholder="60 kg"
-                      placeholderTextColor={Colors.textMuted}
-                      value={peso}
-                      onChangeText={setPeso}
+
+                  <Text style={styles.label}>Imagen de referencia</Text>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.mediaPickBtn,
+                      !!form.imagenUrl && styles.mediaPickBtnSuccess,
+                      pressed && { opacity: 0.8 },
+                    ]}
+                    onPress={() => handlePickImage(index)}
+                    disabled={isUploadingAny}
+                  >
+                    {uploadingIdx?.index === index && uploadingIdx?.type === "image" ? (
+                      <ActivityIndicator color={Colors.primary} size="small" />
+                    ) : (
+                      <Ionicons
+                        name={form.imagenUrl ? "checkmark-circle" : "image-outline"}
+                        size={22}
+                        color={form.imagenUrl ? Colors.success : Colors.primary}
+                      />
+                    )}
+                    <Text style={[styles.mediaPickBtnText, !!form.imagenUrl && { color: Colors.success }]}>
+                      {uploadingIdx?.index === index && uploadingIdx?.type === "image" ? `Subiendo... ${imgUpload.progress}%` : form.imagenUrl ? "Imagen subida ✓" : "Seleccionar imagen"}
+                    </Text>
+                  </Pressable>
+
+                  {form.imagenUrl ? (
+                    <Image
+                      source={{ uri: form.imagenUrl }}
+                      style={styles.previewImage}
+                      contentFit="cover"
+                      cachePolicy="memory-disk"
                     />
-                  </View>
+                  ) : null}
+
+                  <Text style={[styles.label, { marginTop: 8 }]}>Video demostrativo</Text>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.mediaPickBtn,
+                      !!form.videoUrl && styles.mediaPickBtnSuccess,
+                      { borderColor: Colors.accentBlue + "66" },
+                      pressed && { opacity: 0.8 },
+                    ]}
+                    onPress={() => handlePickVideo(index)}
+                    disabled={isUploadingAny}
+                  >
+                    {uploadingIdx?.index === index && uploadingIdx?.type === "video" ? (
+                      <ActivityIndicator color={Colors.accentBlue} size="small" />
+                    ) : (
+                      <Ionicons
+                        name={form.videoUrl ? "checkmark-circle" : "videocam-outline"}
+                        size={22}
+                        color={form.videoUrl ? Colors.success : Colors.accentBlue}
+                      />
+                    )}
+                    <Text style={[styles.mediaPickBtnText, { color: form.videoUrl ? Colors.success : Colors.accentBlue }, !!form.videoUrl && { color: Colors.success }]}>
+                      {uploadingIdx?.index === index && uploadingIdx?.type === "video" ? `Subiendo... ${vidUpload.progress}%` : form.videoUrl ? "Video subido ✓" : "Seleccionar video"}
+                    </Text>
+                  </Pressable>
                 </View>
-              </View>
-
-              <Text style={styles.label}>Descanso</Text>
-              <View style={styles.inputContainer}>
-                <TextInput
-                  style={styles.modalInput}
-                  placeholder="60s"
-                  placeholderTextColor={Colors.textMuted}
-                  value={descanso}
-                  onChangeText={setDescanso}
-                />
-              </View>
-
-              <Text style={styles.label}>Imagen de referencia</Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.mediaPickBtn,
-                  !!imagenUrl && styles.mediaPickBtnSuccess,
-                  pressed && { opacity: 0.8 },
-                ]}
-                onPress={handlePickImage}
-                disabled={imgUpload.uploading}
-              >
-                {imgUpload.uploading ? (
-                  <ActivityIndicator color={Colors.primary} size="small" />
-                ) : (
-                  <Ionicons
-                    name={imagenUrl ? "checkmark-circle" : "image-outline"}
-                    size={22}
-                    color={imagenUrl ? Colors.success : Colors.primary}
-                  />
-                )}
-                <Text style={[styles.mediaPickBtnText, !!imagenUrl && { color: Colors.success }]}>
-                  {imgUpload.uploading ? `Subiendo... ${imgUpload.progress}%` : imagenUrl ? "Imagen subida ✓" : "Seleccionar imagen"}
-                </Text>
-              </Pressable>
-              <UploadProgressBar
-                visible={imgUpload.uploading}
-                progress={imgUpload.progress}
-                error={imgUpload.error}
-                onRetry={imgUpload.error ? () => { imgUpload.reset(); handlePickImage(); } : undefined}
-              />
-              {imagenUrl ? (
-                <Image
-                  source={{ uri: imagenUrl }}
-                  style={styles.previewImage}
-                  contentFit="cover"
-                  cachePolicy="memory-disk"
-                />
-              ) : null}
-
-              <Text style={[styles.label, { marginTop: 8 }]}>Video demostrativo</Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.mediaPickBtn,
-                  !!videoUrl && styles.mediaPickBtnSuccess,
-                  { borderColor: Colors.accentBlue + "66" },
-                  pressed && { opacity: 0.8 },
-                ]}
-                onPress={handlePickVideo}
-                disabled={vidUpload.uploading}
-              >
-                {vidUpload.uploading ? (
-                  <ActivityIndicator color={Colors.accentBlue} size="small" />
-                ) : (
-                  <Ionicons
-                    name={videoUrl ? "checkmark-circle" : "videocam-outline"}
-                    size={22}
-                    color={videoUrl ? Colors.success : Colors.accentBlue}
-                  />
-                )}
-                <Text style={[styles.mediaPickBtnText, { color: videoUrl ? Colors.success : Colors.accentBlue }, !!videoUrl && { color: Colors.success }]}>
-                  {vidUpload.uploading ? `Subiendo... ${vidUpload.progress}%` : videoUrl ? "Video subido ✓" : "Seleccionar video"}
-                </Text>
-              </Pressable>
-              <UploadProgressBar
-                visible={vidUpload.uploading}
-                progress={vidUpload.progress}
-                error={vidUpload.error}
-                onRetry={vidUpload.error ? () => { vidUpload.reset(); handlePickVideo(); } : undefined}
-              />
+              ))}
 
               <Pressable
                 style={({ pressed }) => [
                   styles.confirmBtn,
-                  (addExMutation.isPending || isUploading) && styles.btnDisabled,
+                  (addExMutation.isPending || isUploadingAny) && styles.btnDisabled,
                   pressed && { opacity: 0.85 },
                 ]}
                 onPress={() => {
-                  if (!nombre.trim()) return setError("El nombre es requerido");
-                  if (isUploading) return setError("Espera a que termine la subida");
+                  const isValid = exForms.every(f => f.nombre.trim() !== "");
+                  if (!isValid) return setError("Todos los ejercicios deben tener nombre");
+                  if (isUploadingAny) return setError("Espera a que termine la subida");
                   addExMutation.mutate();
                 }}
-                disabled={addExMutation.isPending || isUploading}
+                disabled={addExMutation.isPending || isUploadingAny}
               >
                 {addExMutation.isPending ? (
                   <ActivityIndicator color={Colors.primaryText} />
                 ) : (
-                  <Text style={styles.confirmBtnText}>Agregar Ejercicio</Text>
+                  <Text style={styles.confirmBtnText}>
+                    {tipoEjecucion === "individual" ? "Agregar Ejercicio" : `Guardar ${tipoEjecucion === "biserie" ? "Bi-serie" : "Tri-serie"}`}
+                  </Text>
                 )}
               </Pressable>
 
@@ -924,6 +994,23 @@ const styles = StyleSheet.create({
   clientChipTextActive: {
     color: "#fff",
   },
+  
+  // --- NUEVOS ESTILOS PARA LOS BLOQUES DINÁMICOS ---
+  formBlock: {
+    backgroundColor: Colors.surface + "60",
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  blockTitle: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 18,
+    color: Colors.accentOrange,
+    marginBottom: 14,
+  },
+
   mediaPickBtn: {
     flexDirection: "row",
     alignItems: "center",
