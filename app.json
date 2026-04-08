@@ -2,7 +2,7 @@
   "expo": {
     "name": "Diego App",
     "slug": "diego-app",
-    "version": "1.0.1",
+    "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "diegoapp",
@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.diegoln.app",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSCameraUsageDescription": "Diego App necesita acceso a la cámara para que puedas tomar fotos de tu progreso.",
         "NSPhotoLibraryUsageDescription": "Diego App necesita acceso a tu galería para que puedas subir videos de ejercicios y fotos de progreso.",

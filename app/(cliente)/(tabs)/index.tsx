@@ -23,23 +23,7 @@ export default function ClienteDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
 
-  // 1. Obtener Perfil del Cliente (para la fecha de membresía)
-  const { data: profileData } = useQuery({
-    queryKey: ["client_profile", user?.id],
-    enabled: !!user?.id,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("perfiles")
-        .select("*")
-        .eq("id", user?.id)
-        .single();
-      
-      if (error) throw new Error(error.message);
-      return data;
-    },
-  });
-
-  // 2. Obtener Rutinas Asignadas al Cliente
+  // 1. Obtener Rutinas Asignadas al Cliente
   const { data: routinesData, refetch: refetchRoutines } = useQuery({
     queryKey: ["client_routines", user?.id],
     enabled: !!user?.id,
@@ -65,7 +49,7 @@ export default function ClienteDashboard() {
     },
   });
 
-  // 3. Obtener Progreso
+  // 2. Obtener Progreso
   const { data: progressData, refetch: refetchProgress } = useQuery({
     queryKey: ["client_progress", user?.id],
     enabled: !!user?.id,
@@ -81,7 +65,7 @@ export default function ClienteDashboard() {
     },
   });
 
-  // 4. Obtener Mensajes
+  // 3. Obtener Mensajes
   const { data: chatsData, refetch: refetchChats } = useQuery({
     queryKey: ["client_chats_preview", user?.id],
     enabled: !!user?.id,
@@ -132,7 +116,6 @@ export default function ClienteDashboard() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([refetchRoutines(), refetchProgress(), refetchChats()]);
-    qc.invalidateQueries({ queryKey: ["client_profile", user?.id] });
     setRefreshing(false);
   }, [refetchRoutines, refetchProgress, refetchChats]);
 
@@ -191,28 +174,6 @@ export default function ClienteDashboard() {
   const saludo = hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
   const topInset = insets.top + (Platform.OS === "web" ? 67 : 0);
 
-  // LÓGICA PARA FECHA DE MEMBRESÍA
-  let diasRestantes = null;
-  let isVencida = false;
-  let isCercaVencer = false;
-
-  if (profileData?.fecha_membresia) {
-    const fechaMembresia = new Date(profileData.fecha_membresia);
-    const hoy = new Date();
-    // Ponemos ambas fechas a las 00:00 para calcular los días exactos de diferencia
-    fechaMembresia.setHours(0,0,0,0);
-    hoy.setHours(0,0,0,0);
-    
-    const diferenciaMilisegundos = fechaMembresia.getTime() - hoy.getTime();
-    diasRestantes = Math.ceil(diferenciaMilisegundos / (1000 * 60 * 60 * 24));
-    
-    if (diasRestantes < 0) {
-      isVencida = true;
-    } else if (diasRestantes <= 3) {
-      isCercaVencer = true;
-    }
-  }
-
   return (
     <View style={{ flex: 1, backgroundColor: Colors.background }}>
       <ScrollView
@@ -235,27 +196,6 @@ export default function ClienteDashboard() {
                 <Ionicons name="person" size={12} color={Colors.accentBlue} />
                 <Text style={[styles.badgeText, { color: Colors.accentBlue }]}>Paciente</Text>
               </View>
-              {/* Indicador sutil de membresía en cabecera */}
-              {profileData?.fecha_membresia && (
-                <View style={[
-                  styles.badge, 
-                  isVencida ? { backgroundColor: Colors.error + "22" } 
-                  : isCercaVencer ? { backgroundColor: Colors.warning + "22" } 
-                  : { backgroundColor: Colors.success + "22" }
-                ]}>
-                  <Ionicons 
-                    name={isVencida ? "alert-circle" : "calendar"} 
-                    size={12} 
-                    color={isVencida ? Colors.error : isCercaVencer ? Colors.warning : Colors.success} 
-                  />
-                  <Text style={[
-                    styles.badgeText, 
-                    { color: isVencida ? Colors.error : isCercaVencer ? Colors.warning : Colors.success }
-                  ]}>
-                    {isVencida ? "Vencida" : `${diasRestantes} días`}
-                  </Text>
-                </View>
-              )}
             </View>
           </View>
           <View>
@@ -273,39 +213,6 @@ export default function ClienteDashboard() {
             </View>
           </View>
         </Pressable>
-
-        {/* BANNER DE AVISO DE MEMBRESÍA (Vencida o a punto de vencer) */}
-        {profileData?.fecha_membresia && (isVencida || isCercaVencer) && (
-          <View style={[
-            styles.alertBanner,
-            isVencida ? { backgroundColor: Colors.error + "15", borderColor: Colors.error + "40" }
-                      : { backgroundColor: Colors.warning + "15", borderColor: Colors.warning + "40" }
-          ]}>
-            <View style={[
-              styles.alertIconWrap,
-              isVencida ? { backgroundColor: Colors.error + "30" } : { backgroundColor: Colors.warning + "30" }
-            ]}>
-              <Ionicons 
-                name={isVencida ? "warning" : "time"} 
-                size={20} 
-                color={isVencida ? Colors.error : Colors.warning} 
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[
-                styles.alertTitle, 
-                { color: isVencida ? Colors.error : Colors.warning }
-              ]}>
-                {isVencida ? "¡Membresía Vencida!" : "Membresía por vencer"}
-              </Text>
-              <Text style={styles.alertText}>
-                {isVencida 
-                  ? "Contacta a tu entrenador para renovarla y no perder tus rutinas."
-                  : `Tu membresía vence en ${diasRestantes === 0 ? 'hoy' : `${diasRestantes} días`}. Recuerda renovarla pronto.`}
-              </Text>
-            </View>
-          </View>
-        )}
 
         {/* Stats */}
         <View style={styles.statsRow}>
@@ -469,34 +376,6 @@ export default function ClienteDashboard() {
             <Text style={styles.profileName}>{user?.nombre} {user?.apellido}</Text>
             <Text style={styles.profileEmail}>{user?.email}</Text>
 
-            {/* SECCIÓN MEMBRESÍA EN EL PERFIL */}
-            {profileData?.fecha_membresia ? (
-              <View style={styles.membershipCard}>
-                <Ionicons name="calendar-clear" size={24} color={Colors.primary} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.membershipLabel}>Vencimiento de membresía</Text>
-                  <Text style={styles.membershipDate}>{profileData.fecha_membresia}</Text>
-                </View>
-                <View style={[
-                  styles.membershipStatus,
-                  isVencida ? { backgroundColor: Colors.error + "22" } 
-                  : isCercaVencer ? { backgroundColor: Colors.warning + "22" } 
-                  : { backgroundColor: Colors.success + "22" }
-                ]}>
-                  <Text style={[
-                    styles.membershipStatusText,
-                    { color: isVencida ? Colors.error : isCercaVencer ? Colors.warning : Colors.success }
-                  ]}>
-                    {isVencida ? "Vencida" : `${diasRestantes} días`}
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              <View style={[styles.membershipCard, { justifyContent: 'center' }]}>
-                <Text style={styles.membershipLabel}>No tienes una fecha de membresía asignada.</Text>
-              </View>
-            )}
-
             <Pressable style={styles.changePhotoBtn} onPress={handleChangePhoto} disabled={photoUpload.uploading || updateAvatarMutation.isPending}>
               {(photoUpload.uploading || updateAvatarMutation.isPending) ? (
                 <ActivityIndicator color={Colors.primary} />
@@ -588,33 +467,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 1,
     borderColor: Colors.border,
-  },
-  alertBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
-    borderWidth: 1,
-    gap: 12,
-  },
-  alertIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  alertTitle: {
-    fontFamily: "Outfit_700Bold",
-    fontSize: 16,
-    marginBottom: 2,
-  },
-  alertText: {
-    fontFamily: "Outfit_400Regular",
-    fontSize: 13,
-    color: Colors.textSecondary,
-    lineHeight: 18,
   },
   statsRow: {
     flexDirection: "row",
@@ -885,38 +737,6 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginBottom: 16,
   },
-  membershipCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: Colors.surface,
-    width: "100%",
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 20,
-    gap: 14,
-  },
-  membershipLabel: {
-    fontFamily: "Outfit_400Regular",
-    fontSize: 13,
-    color: Colors.textMuted,
-    marginBottom: 2,
-  },
-  membershipDate: {
-    fontFamily: "Outfit_700Bold",
-    fontSize: 16,
-    color: Colors.text,
-  },
-  membershipStatus: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  membershipStatusText: {
-    fontFamily: "Outfit_600SemiBold",
-    fontSize: 12,
-  },
   changePhotoBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -925,6 +745,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
+    marginTop: 10,
   },
   changePhotoText: {
     fontFamily: "Outfit_600SemiBold",

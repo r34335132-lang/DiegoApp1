@@ -10,7 +10,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
 import * as Haptics from "expo-haptics";
-import DateTimePicker from '@react-native-community/datetimepicker';
 
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/auth";
@@ -27,13 +26,9 @@ export default function ClientesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
-  // Estado para el modal de editar membresía y estado
+  // Estado para el modal de editar estado
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedClientToEdit, setSelectedClientToEdit] = useState<any>(null);
-  
-  // Fecha
-  const [fechaMembresia, setFechaMembresia] = useState<Date | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   
   // Estado manual
   const [isClientActive, setIsClientActive] = useState(true);
@@ -141,23 +136,13 @@ export default function ClientesScreen() {
     },
   });
 
-  // MUTACIÓN: Editar Cliente (Fecha y Estado) YA CORREGIDA
+  // MUTACIÓN: Editar Cliente (Estado de la cuenta)
   const editClientMutation = useMutation({
     mutationFn: async () => {
       if (!selectedClientToEdit?.id) throw new Error("Cliente no seleccionado");
 
-      let fechaStr = null;
-      if (fechaMembresia) {
-        // Formatear a YYYY-MM-DD respetando zona horaria local
-        const year = fechaMembresia.getFullYear();
-        const month = String(fechaMembresia.getMonth() + 1).padStart(2, '0');
-        const day = String(fechaMembresia.getDate()).padStart(2, '0');
-        fechaStr = `${year}-${month}-${day}`;
-      }
-
       const payload: any = { 
-        fecha_membresia: fechaStr,
-        estado: isClientActive ? 'activo' : 'inactivo' // AHORA SÍ GUARDARÁ EL ESTADO EN SUPABASE
+        estado: isClientActive ? 'activo' : 'inactivo' 
       };
       
       const { error } = await supabase
@@ -171,9 +156,8 @@ export default function ClientesScreen() {
       qc.invalidateQueries({ queryKey: ["clients", user?.id] });
       setShowEditModal(false);
       setSelectedClientToEdit(null);
-      setFechaMembresia(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert("Éxito", "Datos del cliente actualizados.");
+      Alert.alert("Éxito", "Estado del cliente actualizado.");
     },
     onError: (err: any) => {
       Alert.alert("Error", err.message || "No se pudo actualizar al cliente");
@@ -190,21 +174,7 @@ export default function ClientesScreen() {
   const openEditModal = (client: any) => {
     setSelectedClientToEdit(client);
     setIsClientActive(client.status !== "inactivo");
-    
-    if (client.fecha_membresia) {
-      // Añadimos T12:00:00 para evitar que la zona horaria le reste un día
-      setFechaMembresia(new Date(client.fecha_membresia + "T12:00:00")); 
-    } else {
-      setFechaMembresia(new Date()); // Fecha actual por defecto si no tiene
-    }
-    
     setShowEditModal(true);
-  };
-
-  const handleDateChange = (event: any, selectedDate?: Date) => {
-    const currentDate = selectedDate || fechaMembresia;
-    setShowDatePicker(Platform.OS === 'ios'); 
-    if (currentDate) setFechaMembresia(currentDate);
   };
 
   const clients = (data?.clients || []).filter((c: any) => {
@@ -317,14 +287,6 @@ export default function ClientesScreen() {
                       <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
                       <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
                     </View>
-                    
-                    {/* Fecha de Membresía */}
-                    {!isPendiente && client.fecha_membresia && (
-                      <View style={styles.membershipBadge}>
-                        <Ionicons name="calendar-outline" size={12} color={Colors.textSecondary} />
-                        <Text style={styles.membershipText}>Vence: {client.fecha_membresia}</Text>
-                      </View>
-                    )}
                   </View>
                 </View>
 
@@ -416,7 +378,7 @@ export default function ClientesScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* --- MODAL EDITAR CLIENTE (MEMBRESÍA Y ESTADO) --- */}
+      {/* --- MODAL EDITAR ESTADO DEL CLIENTE --- */}
       <Modal
         visible={showEditModal}
         transparent
@@ -424,7 +386,7 @@ export default function ClientesScreen() {
         onRequestClose={() => setShowEditModal(false)}
       >
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-          <Pressable style={styles.overlay} onPress={() => { setShowEditModal(false); setShowDatePicker(false); }} />
+          <Pressable style={styles.overlay} onPress={() => setShowEditModal(false)} />
           <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>Ajustes de Paciente</Text>
@@ -433,7 +395,7 @@ export default function ClientesScreen() {
             </Text>
 
             {/* Selector de Estado */}
-            <Text style={styles.label}>Estado de la cuenta</Text>
+            <Text style={styles.label}>Estado del acceso a la App</Text>
             <View style={styles.statusToggleRow}>
               <Pressable
                 style={[styles.statusToggleBtn, isClientActive && styles.statusToggleBtnActive]}
@@ -451,43 +413,10 @@ export default function ClientesScreen() {
               </Pressable>
             </View>
 
-            <Text style={styles.label}>Vencimiento de membresía</Text>
-            
-            {/* Campo que abre el calendario al tocarse */}
-            <Pressable 
-              style={styles.datePickerBtn} 
-              onPress={() => setShowDatePicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={20} color={Colors.primary} />
-              <Text style={styles.datePickerText}>
-                {fechaMembresia ? fechaMembresia.toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }) : "Seleccionar fecha"}
-              </Text>
-            </Pressable>
-
-            {/* Componente del Calendario Nativo */}
-            {showDatePicker && (
-              <View style={Platform.OS === 'ios' ? styles.iosDatePickerContainer : undefined}>
-                <DateTimePicker
-                  value={fechaMembresia || new Date()}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                  onChange={handleDateChange}
-                  minimumDate={new Date()}
-                  textColor={Colors.text}
-                  themeVariant="dark" 
-                />
-                {Platform.OS === 'ios' && (
-                  <Pressable style={styles.iosDateDoneBtn} onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.iosDateDoneText}>Listo</Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
-
             <Pressable
               style={({ pressed }) => [
                 styles.confirmBtn,
-                { marginTop: 24 },
+                { marginTop: 12 },
                 editClientMutation.isPending && styles.btnDisabled,
                 pressed && { opacity: 0.85 },
               ]}
@@ -503,7 +432,7 @@ export default function ClientesScreen() {
 
             <Pressable
               style={({ pressed }) => [styles.cancelBtn, pressed && { opacity: 0.7 }]}
-              onPress={() => { setShowEditModal(false); setShowDatePicker(false); }}
+              onPress={() => setShowEditModal(false)}
             >
               <Text style={styles.cancelBtnText}>Cancelar</Text>
             </Pressable>
@@ -651,22 +580,6 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     fontSize: 12,
   },
-  membershipBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: Colors.surface,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  membershipText: {
-    fontFamily: "Outfit_500Medium",
-    fontSize: 11,
-    color: Colors.textSecondary,
-  },
   roleText: {
     fontFamily: "Outfit_400Regular",
     fontSize: 12,
@@ -784,7 +697,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.textSecondary,
   },
-  // Nuevos estilos para los toggles de estado
   statusToggleRow: {
     flexDirection: "row",
     gap: 10,
@@ -815,39 +727,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textSecondary,
   },
-  // Date Picker Estilos
-  datePickerBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: Colors.surface,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  datePickerText: {
-    fontFamily: "Outfit_500Medium",
-    fontSize: 16,
-    color: Colors.text,
-  },
-  iosDatePickerContainer: {
-    backgroundColor: Colors.surface,
-    borderRadius: 14,
-    marginTop: 8,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  iosDateDoneBtn: {
-    backgroundColor: Colors.primary,
-    padding: 12,
-    alignItems: "center",
-  },
-  iosDateDoneText: {
-    fontFamily: "Outfit_700Bold",
-    color: Colors.primaryText,
-    fontSize: 15,
-  }
 });
