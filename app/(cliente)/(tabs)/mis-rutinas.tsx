@@ -21,15 +21,18 @@ export default function MisRutinasScreen() {
     queryKey: ["client_routines_list", user?.id],
     enabled: !!user?.id,
     queryFn: async () => {
-      // Buscamos las rutinas y le pedimos a Supabase que también traiga los ID de los ejercicios para contarlos
+      // CAMBIO IMPORTANTE: Utilizamos un "inner join" (!inner) para traer solo 
+      // las rutinas que tienen un registro en la tabla intermedia "rutina_clientes"
+      // que pertenezca al ID de este cliente.
       const { data: routinesData, error } = await supabase
         .from("rutinas")
         .select(`
           *,
           perfiles:entrenador_id (nombre, apellido),
-          ejercicios (id)
+          ejercicios (id),
+          rutina_clientes!inner(cliente_id)
         `)
-        .eq("cliente_id", user?.id)
+        .eq("rutina_clientes.cliente_id", user?.id)
         .order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);
@@ -39,7 +42,7 @@ export default function MisRutinasScreen() {
         ...r,
         trainer_nombre: r.perfiles?.nombre,
         trainer_apellido: r.perfiles?.apellido,
-        exercise_count: r.ejercicios?.length || 0, // <-- Nueva mejora: Conteo de ejercicios
+        exercise_count: r.ejercicios?.length || 0,
       }));
 
       return { routines: formatted };

@@ -24,12 +24,13 @@ export default function RutinasScreen() {
   const [nombre, setNombre] = useState("");
   const [descripcion, setDescripcion] = useState("");
   const [nivel, setNivel] = useState("intermedio");
-  const [clientId, setClientId] = useState("");
+  // CAMBIO: Ahora es un arreglo para múltiples clientes
+  const [clientIds, setClientIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
-  // 1. OBTENER RUTINAS DE SUPABASE
+  // 1. OBTENER RUTINAS DE SUPABASE (Actualizado para tabla intermedia)
   const { data: routinesData, refetch } = useQuery({
     queryKey: ["routines", user?.id],
     queryFn: async () => {
@@ -39,18 +40,26 @@ export default function RutinasScreen() {
         .from("rutinas")
         .select(`
           *,
-          perfiles:cliente_id (nombre, apellido)
+          rutina_clientes (
+            perfiles:cliente_id (nombre, apellido)
+          )
         `)
         .eq("entrenador_id", user.id)
         .order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);
 
-      const formatted = (data || []).map((r: any) => ({
-        ...r,
-        client_nombre: r.perfiles?.nombre,
-        client_apellido: r.perfiles?.apellido,
-      }));
+      // Formateamos para sacar un texto con todos los nombres (Ej: "Diego, Juan")
+      const formatted = (data || []).map((r: any) => {
+        const assigned = r.rutina_clientes
+          ?.map((rc: any) => `${rc.perfiles?.nombre} ${rc.perfiles?.apellido}`)
+          .filter(Boolean)
+          .join(", ");
+        return {
+          ...r,
+          assigned_names: assigned || null,
+        };
+      });
 
       return { routines: formatted };
     },
@@ -71,30 +80,41 @@ export default function RutinasScreen() {
 
       if (error) throw new Error(error.message);
       
-      return { clients: data.map(c => ({ ...c, status: "activo" })) };
+      return { clients: data };
     },
     enabled: !!user?.id,
   });
 
-  // 3. CREAR RUTINA
+  // 3. CREAR RUTINA (Actualizado para guardar múltiples en la tabla intermedia)
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!user?.id) throw new Error("No autenticado");
 
-      const { data, error } = await supabase
+      // Primero creamos la rutina base (ya no pasamos cliente_id aquí)
+      const { data: newRoutine, error: routineError } = await supabase
         .from("rutinas")
         .insert([{
           nombre: nombre.trim(),
           descripcion: descripcion.trim() || null,
           nivel,
-          cliente_id: clientId || null,
           entrenador_id: user.id
         }])
         .select()
         .single();
 
-      if (error) throw new Error(error.message);
-      return data;
+      if (routineError) throw new Error(routineError.message);
+
+      // Luego insertamos las relaciones con los clientes elegidos en la tabla intermedia
+      if (clientIds.length > 0) {
+        const inserts = clientIds.map(cId => ({
+          rutina_id: newRoutine.id,
+          cliente_id: cId
+        }));
+        const { error: clientsError } = await supabase.from("rutina_clientes").insert(inserts);
+        if (clientsError) throw new Error(clientsError.message);
+      }
+
+      return newRoutine;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routines", user?.id] });
@@ -127,7 +147,7 @@ export default function RutinasScreen() {
     setNombre("");
     setDescripcion("");
     setNivel("intermedio");
-    setClientId("");
+    setClientIds([]); // Reseteamos el arreglo
     setError("");
   };
 
@@ -235,9 +255,9 @@ export default function RutinasScreen() {
                   {item.nivel}
                 </Text>
               </View>
-              {item.client_nombre && (
-                <Text style={styles.clientText}>
-                  <Ionicons name="person" size={11} color={Colors.textMuted} /> {item.client_nombre} {item.client_apellido}
+              {item.assigned_names && (
+                <Text style={styles.clientText} numberOfLines={1}>
+                  <Ionicons name="people" size={12} color={Colors.textMuted} /> {item.assigned_names}
                 </Text>
               )}
               <View style={styles.arrowBtn}>
@@ -306,27 +326,26 @@ export default function RutinasScreen() {
 
           {activeClients.length > 0 && (
             <>
-              <Text style={styles.label}>Asignar a paciente (opcional)</Text>
+              <Text style={styles.label}>Asignar a pacientes (opcional)</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.clientsScroll}>
-                <Pressable
-                  style={[styles.clientOption, !clientId && styles.clientOptionActive]}
-                  onPress={() => setClientId("")}
-                >
-                  <Text style={[styles.clientOptionText, !clientId && styles.clientOptionTextActive]}>
-                    Ninguno
-                  </Text>
-                </Pressable>
-                {activeClients.map((c: any) => (
-                  <Pressable
-                    key={c.id}
-                    style={[styles.clientOption, clientId === c.id && styles.clientOptionActive]}
-                    onPress={() => setClientId(c.id)}
-                  >
-                    <Text style={[styles.clientOptionText, clientId === c.id && styles.clientOptionTextActive]}>
-                      {c.nombre} {c.apellido}
-                    </Text>
-                  </Pressable>
-                ))}
+                {activeClients.map((c: any) => {
+                  const isSelected = clientIds.includes(c.id);
+                  return (
+                    <Pressable
+                      key={c.id}
+                      style={[styles.clientOption, isSelected && styles.clientOptionActive]}
+                      onPress={() => {
+                        setClientIds(prev => 
+                          isSelected ? prev.filter(id => id !== c.id) : [...prev, c.id]
+                        );
+                      }}
+                    >
+                      <Text style={[styles.clientOptionText, isSelected && styles.clientOptionTextActive]}>
+                        {c.nombre} {c.apellido}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </ScrollView>
             </>
           )}
@@ -509,6 +528,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textMuted,
     flex: 1,
+    paddingRight: 10,
   },
   arrowBtn: {
     marginLeft: "auto",
@@ -603,8 +623,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   clientOptionActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
+    backgroundColor: Colors.accentBlue,
+    borderColor: Colors.accentBlue,
   },
   clientOptionText: {
     fontFamily: "Outfit_500Medium",
@@ -612,7 +632,7 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   clientOptionTextActive: {
-    color: Colors.primaryText,
+    color: "#fff",
   },
   errorBox: {
     flexDirection: "row",
