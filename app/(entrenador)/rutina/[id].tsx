@@ -126,6 +126,10 @@ export default function RutinaDetailScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routine_details", id] });
       qc.invalidateQueries({ queryKey: ["routines", user?.id] });
+      qc.invalidateQueries({ queryKey: ["client_routines"] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list"] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list_offline"] });
+      qc.invalidateQueries({ queryKey: ["client_routine_details", id] });
       setShowEditModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -212,6 +216,8 @@ export default function RutinaDetailScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routine_details", id] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list_offline"] });
+      qc.invalidateQueries({ queryKey: ["client_routine_details", id] });
       setShowModal(false);
       resetForm();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -293,6 +299,8 @@ export default function RutinaDetailScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routine_details", id] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list_offline"] });
+      qc.invalidateQueries({ queryKey: ["client_routine_details", id] });
       setShowEditExModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -306,6 +314,8 @@ export default function RutinaDetailScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routine_details", id] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list_offline"] });
+      qc.invalidateQueries({ queryKey: ["client_routine_details", id] });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     },
   });

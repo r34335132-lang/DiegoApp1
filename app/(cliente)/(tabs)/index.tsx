@@ -4,7 +4,7 @@ import {
   Platform, RefreshControl, Image, ActivityIndicator, Modal, Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -17,7 +17,6 @@ import * as Haptics from "expo-haptics";
 export default function ClienteDashboard() {
   const insets = useSafeAreaInsets();
   const { user, setUser, logout } = useAuth();
-  const qc = useQueryClient();
   const photoUpload = useUpload();
 
   const [refreshing, setRefreshing] = useState(false);
@@ -32,9 +31,10 @@ export default function ClienteDashboard() {
         .from("rutinas")
         .select(`
           *,
-          perfiles:entrenador_id (nombre, apellido)
+          perfiles:entrenador_id (nombre, apellido),
+          rutina_clientes!inner (cliente_id)
         `)
-        .eq("cliente_id", user?.id)
+        .eq("rutina_clientes.cliente_id", user?.id)
         .order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);

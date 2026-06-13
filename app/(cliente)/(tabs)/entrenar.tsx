@@ -144,9 +144,10 @@ export default function EntrenarScreen() {
         .select(`
           *,
           perfiles:entrenador_id (nombre, apellido),
-          ejercicios (*) 
+          ejercicios (*),
+          rutina_clientes!inner (cliente_id)
         `) 
-        .eq("cliente_id", user?.id)
+        .eq("rutina_clientes.cliente_id", user?.id)
         .order("created_at", { ascending: false });
 
       if (error) throw new Error(error.message);
@@ -161,7 +162,8 @@ export default function EntrenarScreen() {
 
       return { routines: formatted };
     },
-    staleTime: 1000 * 60 * 60,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const startSessionMutation = useMutation({

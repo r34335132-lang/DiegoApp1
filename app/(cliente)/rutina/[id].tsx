@@ -3,13 +3,13 @@ import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, RefreshControl,
 } from "react-native";
-import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import Colors from "@/constants/colors";
 import { MediaViewer } from "@/components/MediaViewer";
+import { useAuth } from "@/context/auth";
 
 // Importar Supabase
 import { supabase } from "@/lib/supabase";
@@ -17,21 +17,24 @@ import { supabase } from "@/lib/supabase";
 export default function ClienteRutinaDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
 
   // 1. OBTENER DETALLE DE RUTINA Y EJERCICIOS DESDE SUPABASE
   const { data, refetch, isLoading, isError } = useQuery({
-    queryKey: ["client_routine_details", id],
-    enabled: !!id,
+    queryKey: ["client_routine_details", id, user?.id],
+    enabled: !!id && !!user?.id,
     queryFn: async () => {
       // Buscar la rutina y los datos del entrenador
       const { data: routineData, error: routineError } = await supabase
         .from("rutinas")
         .select(`
           *,
-          perfiles:entrenador_id (nombre, apellido)
+          perfiles:entrenador_id (nombre, apellido),
+          rutina_clientes!inner (cliente_id)
         `)
         .eq("id", id)
+        .eq("rutina_clientes.cliente_id", user?.id)
         .single();
 
       if (routineError) throw new Error(routineError.message);
@@ -54,7 +57,8 @@ export default function ClienteRutinaDetailScreen() {
         exercises: exercisesData || [],
       };
     },
-    staleTime: 1000 * 60 * 5,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const onRefresh = async () => {

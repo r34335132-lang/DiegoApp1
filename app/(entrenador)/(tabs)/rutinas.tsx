@@ -118,6 +118,9 @@ export default function RutinasScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routines", user?.id] });
+      qc.invalidateQueries({ queryKey: ["client_routines"] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list"] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list_offline"] });
       setShowModal(false);
       resetForm();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -139,6 +142,10 @@ export default function RutinasScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["routines", user?.id] });
+      qc.invalidateQueries({ queryKey: ["client_routines"] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list"] });
+      qc.invalidateQueries({ queryKey: ["client_routines_list_offline"] });
+      qc.invalidateQueries({ queryKey: ["client_routine_details"] });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
   });
